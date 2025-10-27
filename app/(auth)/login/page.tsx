@@ -5,6 +5,7 @@
  * 
  * User login form
  * Handles authentication and stores session
+ * FIXED: Added black text color for input fields for proper visibility
  */
 
 "use client";
@@ -119,7 +120,7 @@ export default function LoginPage() {
               type="email"
               required
               placeholder="you@example.com"
-              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-600 focus:outline-none transition-colors"
+              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-600 focus:outline-none transition-colors text-black placeholder:text-gray-400"
               disabled={loading}
             />
           </div>
@@ -136,7 +137,7 @@ export default function LoginPage() {
                 type={showPassword ? "text" : "password"}
                 required
                 placeholder="••••••••"
-                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-600 focus:outline-none transition-colors"
+                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-green-600 focus:outline-none transition-colors text-black placeholder:text-gray-400"
                 disabled={loading}
               />
               <button

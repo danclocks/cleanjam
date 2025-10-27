@@ -3,209 +3,161 @@
  * FILE PATH: app/dashboard/page.tsx
  * ===================================
  * 
- * Dashboard page showing logged-in user's data
- * Displays real points, reports, and profile information
+ * Main dashboard page with quick actions and statistics
+ * Displays user profile, summary stats, and navigation to key features
+ * FIXED: Better error handling, null checks, and data validation
  */
 
 "use client";
 
 import {
-  Leaf,
-  LogOut,
-  Menu,
-  X,
-  Plus,
   Trash2,
-  TrendingUp,
-  Gift,
-  MapPin,
   Calendar,
-  Bell,
-  Settings,
+  Gift,
+  Plus,
+  TrendingUp,
+  AlertCircle,
+  CheckCircle,
+  Clock,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { logout, clearSession, getStoredUser } from "@/lib/auth";
+import Link from "next/link";
+import { getStoredUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabaseClient";
+
+interface UserProfile {
+  user_id: string;
+  full_name: string;
+  email: string;
+  username: string;
+  avatar_url: string | null;
+}
+
+interface DashboardStats {
+  totalReports: number;
+  pendingReports: number;
+  resolvedReports: number;
+  totalPoints: number;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const [reports, setReports] = useState<any[]>([]);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [stats, setStats] = useState<DashboardStats>({
+    totalReports: 0,
+    pendingReports: 0,
+    resolvedReports: 0,
+    totalPoints: 0,
+  });
   const [error, setError] = useState("");
 
-  // ==================== FETCH USER DATA ====================
+  // ==================== FETCH USER & STATS ====================
 
   useEffect(() => {
-    const fetchUserData = async () => {
+    const fetchDashboardData = async () => {
       try {
         setLoading(true);
         setError("");
 
-        // Get user from localStorage (set during login)
+        console.log("📊 [DASHBOARD] Fetching dashboard data...");
+
         const storedUser = getStoredUser();
 
         if (!storedUser) {
-          console.error("❌ No user found in localStorage");
+          console.warn("⚠️ [DASHBOARD] No stored user found");
           router.push("/login");
           return;
         }
 
-        console.log("✅ User from storage:", storedUser.email);
-        setUser(storedUser);
+        console.log("✅ [DASHBOARD] Stored user found:", storedUser.id);
 
-        // ==================== FETCH USER PROFILE FROM DATABASE ====================
-
-        console.log("👤 Fetching user profile...");
-
+        // Fetch user profile
         const { data: profileData, error: profileError } = await supabase
           .from("users")
-          .select(
-            `
-            user_id,
-            auth_id,
-            email,
-            full_name,
-            username,
-            role,
-            is_active,
-            avatar_url,
-            address,
-            community
-          `
-          )
+          .select("user_id, full_name, email, username, avatar_url")
           .eq("auth_id", storedUser.id)
           .single();
 
         if (profileError) {
-          console.error("❌ Profile fetch error:", profileError.message);
+          console.error("❌ [DASHBOARD] Profile error:", profileError.message);
           setError("Failed to load user profile");
+          setLoading(false);
           return;
         }
 
-        console.log("✅ Profile loaded:", profileData.full_name);
-        setUserProfile(profileData);
-
-        // ==================== FETCH USER REPORTS ====================
-
-        console.log("📋 Fetching user reports...");
-
-        const { data: reportsData, error: reportsError } = await supabase
-          .from("reports")
-          .select(
-            `
-            report_id,
-            user_id,
-            location,
-            latitude,
-            longitude,
-            description,
-            report_type,
-            photo_url,
-            status,
-            priority,
-            created_at,
-            resolved_at,
-            resolution_notes
-          `
-          )
-          .eq("user_id", profileData.user_id)
-          .order("created_at", { ascending: false });
-
-        if (reportsError) {
-          console.warn("⚠️ Reports fetch warning:", reportsError.message);
-          // Don't fail if reports don't load
-          setReports([]);
-        } else {
-          console.log("✅ Reports loaded:", reportsData?.length);
-          setReports(reportsData || []);
+        if (!profileData) {
+          console.error("❌ [DASHBOARD] No profile data returned");
+          setError("User profile not found");
+          setLoading(false);
+          return;
         }
 
-        // ==================== FETCH USER REWARDS ====================
+        console.log("✅ [DASHBOARD] User profile loaded:", profileData.full_name);
+        setUserProfile(profileData as UserProfile);
 
-        console.log("🎁 Fetching user rewards...");
+        // Fetch user reports for stats
+        console.log("📋 [DASHBOARD] Fetching reports...");
+        
+        const { data: reportsData, error: reportsError } = await supabase
+          .from("reports")
+          .select("status")
+          .eq("user_id", profileData.user_id);
 
-        const { data: rewardsData, error: rewardsError } = await supabase
-          .from("rewards")
-          .select(
-            `
-            reward_id,
-            user_id,
-            points,
-            tier,
-            total_recycled_kg,
-            recycling_sessions,
-            last_updated
-          `
-          )
-          .eq("user_id", profileData.user_id)
-          .single();
+        if (reportsError) {
+          console.warn("⚠️ [DASHBOARD] Reports error:", reportsError.message);
+          // Don't fail completely, just continue with 0 reports
+        }
 
-        if (rewardsError) {
-          console.warn("⚠️ Rewards fetch warning:", rewardsError.message);
-          // User might not have rewards yet
+        if (reportsData && Array.isArray(reportsData) && reportsData.length > 0) {
+          console.log("✅ [DASHBOARD] Reports found:", reportsData.length);
+
+          const totalReports = reportsData.length;
+          const pendingReports = reportsData.filter(
+            (r) => r.status === "pending"
+          ).length;
+          const resolvedReports = reportsData.filter(
+            (r) => r.status === "resolved"
+          ).length;
+
+          // Calculate points: 10 points per resolved report
+          const totalPoints = resolvedReports * 10;
+
+          setStats({
+            totalReports,
+            pendingReports,
+            resolvedReports,
+            totalPoints,
+          });
+
+          console.log("📊 [DASHBOARD] Stats calculated:", {
+            totalReports,
+            pendingReports,
+            resolvedReports,
+            totalPoints,
+          });
         } else {
-          console.log("✅ Rewards loaded:", rewardsData?.points);
-          // You can use this data if needed
+          console.log("ℹ️ [DASHBOARD] No reports found, using default stats");
+          setStats({
+            totalReports: 0,
+            pendingReports: 0,
+            resolvedReports: 0,
+            totalPoints: 0,
+          });
         }
 
         setLoading(false);
+        console.log("✅ [DASHBOARD] Dashboard data loaded successfully");
       } catch (error: any) {
-        console.error("❌ Unexpected error:", error.message);
-        setError("An unexpected error occurred");
+        console.error("❌ [DASHBOARD] Error fetching dashboard data:", error.message);
+        setError(error.message || "An error occurred loading your dashboard");
         setLoading(false);
       }
     };
 
-    fetchUserData();
+    fetchDashboardData();
   }, [router]);
-
-  // ==================== HANDLE LOGOUT ====================
-
-  const handleLogout = async () => {
-    try {
-      const { error } = await logout();
-
-      if (error) {
-        alert("Logout failed: " + error);
-        return;
-      }
-
-      // Clear stored data
-      clearSession();
-
-      // Redirect to login
-      router.push("/login");
-    } catch (error: any) {
-      console.error("Logout error:", error.message);
-      alert("Logout failed");
-    }
-  };
-
-  // ==================== CALCULATE STATS ====================
-
-  const stats = {
-    totalPoints: 245, // TODO: Get from rewards table
-    reportsSubmitted: reports.length,
-    reportsVerified: reports.filter((r) => r.status === "completed").length,
-    resolvedReports: reports.filter((r) => r.status === "resolved").length,
-  };
-
-  // ==================== FORMAT RECENT REPORTS ====================
-
-  const formattedReports = reports.slice(0, 5).map((report) => ({
-    id: report.report_id,
-    title: report.description?.substring(0, 50) || report.report_type,
-    status: report.status,
-    priority: report.priority,
-    date: new Date(report.created_at).toLocaleDateString(),
-    location: report.location,
-    type: report.report_type,
-  }));
 
   // ==================== LOADING STATE ====================
 
@@ -214,7 +166,7 @@ export default function DashboardPage() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 font-semibold">Loading your dashboard...</p>
+          <p className="text-gray-600 font-semibold">Loading dashboard...</p>
         </div>
       </div>
     );
@@ -222,367 +174,259 @@ export default function DashboardPage() {
 
   // ==================== ERROR STATE ====================
 
-  if (error || !userProfile) {
+  if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center bg-white p-8 rounded-lg shadow-md">
-          <p className="text-red-600 font-bold mb-4">
-            {error || "Failed to load dashboard"}
-          </p>
-          <button
-            onClick={() => router.push("/login")}
-            className="bg-green-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-green-700"
-          >
-            Back to Login
-          </button>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md">
+          <div className="flex gap-3">
+            <AlertCircle className="text-red-600 flex-shrink-0" size={24} />
+            <div>
+              <h3 className="text-lg font-bold text-red-900">Error</h3>
+              <p className="text-red-700 mt-2">{error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
+  // ==================== SUCCESS STATE ====================
+
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Navigation */}
-      <nav className="fixed top-0 w-full bg-white shadow-md z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            {/* Logo */}
-            <div className="flex items-center gap-2">
-              <div className="bg-green-600 p-2 rounded-lg">
-                <Leaf className="text-white" size={24} />
-              </div>
-              <span className="text-2xl font-bold text-green-600 hidden sm:inline">
-                CleanJamaica
-              </span>
-            </div>
-
-            {/* Desktop Menu */}
-            <div className="hidden md:flex gap-8 items-center">
-              <a
-                href="/dashboard"
-                className="text-gray-700 hover:text-green-600 font-medium transition-smooth"
-              >
-                Dashboard
-              </a>
-              <a
-                href="#"
-                className="text-gray-700 hover:text-green-600 font-medium transition-smooth"
-              >
-                Reports
-              </a>
-              <a
-                href="#"
-                className="text-gray-700 hover:text-green-600 font-medium transition-smooth"
-              >
-                Rewards
-              </a>
-            </div>
-
-            {/* Profile - Desktop */}
-            <div className="hidden md:block relative">
-              <button
-                onClick={() => setIsProfileOpen(!isProfileOpen)}
-                className="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-gray-100 transition-smooth"
-              >
-                <div className="w-10 h-10 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-full flex items-center justify-center font-bold">
-                  {userProfile.full_name
-                    ?.split(" ")
-                    .map((n: string) => n[0])
-                    .join("")
-                    .toUpperCase() || "U"}
-                </div>
-                <span className="font-semibold text-gray-900">
-                  {userProfile.full_name?.split(" ")[0] || "User"}
-                </span>
-              </button>
-
-              {/* Profile Dropdown */}
-              {isProfileOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200">
-                  <a
-                    href="#"
-                    className="block px-4 py-3 text-gray-700 hover:bg-gray-50 border-b"
-                  >
-                    Profile Settings
-                  </a>
-                  <button
-                    onClick={handleLogout}
-                    className="w-full text-left px-4 py-3 text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                  >
-                    <LogOut size={18} />
-                    Sign Out
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Mobile Menu Button */}
-            <button
-              className="md:hidden"
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-            >
-              {isMenuOpen ? (
-                <X size={24} className="text-green-600" />
-              ) : (
-                <Menu size={24} className="text-green-600" />
-              )}
-            </button>
-          </div>
-
-          {/* Mobile Menu */}
-          {isMenuOpen && (
-            <div className="md:hidden pb-4 border-t">
-              <a
-                href="/dashboard"
-                className="block py-2 text-gray-700 font-medium"
-              >
-                Dashboard
-              </a>
-              <a href="#" className="block py-2 text-gray-700 font-medium">
-                Reports
-              </a>
-              <a href="#" className="block py-2 text-gray-700 font-medium">
-                Rewards
-              </a>
-              <button
-                onClick={handleLogout}
-                className="w-full text-left py-2 text-gray-700 font-medium flex items-center gap-2 mt-2"
-              >
-                <LogOut size={18} />
-                Sign Out
-              </button>
-            </div>
-          )}
+      {/* Header */}
+      <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white py-8 px-4 md:px-8">
+        <div className="max-w-6xl mx-auto">
+          <h1 className="text-3xl md:text-4xl font-black mb-2">Dashboard</h1>
+          <p className="text-green-100">Welcome to CleanJamaica</p>
         </div>
-      </nav>
+      </div>
 
       {/* Main Content */}
-      <div className="pt-24 pb-10 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
-          {/* Welcome Section */}
-          <div className="mb-10">
-            <h1 className="text-5xl md:text-6xl font-black text-gray-900 mb-2">
-              Welcome back,{" "}
-              <span className="text-green-600">
-                {userProfile.full_name?.split(" ")[0] || "User"}
-              </span>
-              !
-            </h1>
-            <p className="text-lg text-gray-600">
-              Keep Jamaica clean. One report at a time.
-            </p>
-            <p className="text-sm text-gray-500 mt-2">
-              📍 {userProfile.community || userProfile.address || "Jamaica"}
-            </p>
-          </div>
-
-          {/* Quick Stats */}
-          <div className="grid md:grid-cols-4 gap-6 mb-10">
-            {[
-              {
-                label: "Your Points",
-                value: stats.totalPoints,
-                icon: Gift,
-                color: "from-green-500 to-emerald-500",
-              },
-              {
-                label: "Reports Submitted",
-                value: stats.reportsSubmitted,
-                icon: Trash2,
-                color: "from-blue-500 to-cyan-500",
-              },
-              {
-                label: "Verified Reports",
-                value: stats.reportsVerified,
-                icon: TrendingUp,
-                color: "from-emerald-500 to-green-500",
-              },
-              {
-                label: "Resolved Issues",
-                value: stats.resolvedReports,
-                icon: Bell,
-                color: "from-yellow-500 to-orange-500",
-              },
-            ].map((stat, index) => (
-              <div
-                key={index}
-                className={`bg-gradient-to-br ${stat.color} p-6 rounded-2xl text-white shadow-lg hover:shadow-xl transition-smooth`}
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm font-semibold opacity-90 mb-2">
-                      {stat.label}
-                    </p>
-                    <p className="text-4xl font-black">{stat.value}</p>
-                  </div>
-                  <stat.icon size={32} className="opacity-80" />
-                </div>
+      <div className="max-w-6xl mx-auto p-4 md:p-8">
+        {/* User Profile Card */}
+        {userProfile ? (
+          <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-2xl shadow-md p-6 mb-8">
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 bg-white text-green-600 rounded-full flex items-center justify-center text-2xl font-bold flex-shrink-0">
+                {userProfile.full_name
+                  ?.split(" ")
+                  .map((n) => n[0])
+                  .join("")
+                  .toUpperCase() || "U"}
               </div>
-            ))}
-          </div>
-
-          {/* Action Buttons */}
-          <div className="grid md:grid-cols-3 gap-6 mb-10">
-            <button className="bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold py-4 rounded-2xl hover:shadow-lg transition-smooth flex items-center justify-center gap-3 text-lg">
-              <Plus size={24} />
-              Report an Issue
-            </button>
-            <button className="bg-white border-2 border-green-600 text-green-600 font-bold py-4 rounded-2xl hover:bg-green-50 transition-smooth flex items-center justify-center gap-3 text-lg">
-              <Calendar size={24} />
-              Pickup Schedule
-            </button>
-            <button className="bg-white border-2 border-green-600 text-green-600 font-bold py-4 rounded-2xl hover:bg-green-50 transition-smooth flex items-center justify-center gap-3 text-lg">
-              <Gift size={24} />
-              Redeem Points
-            </button>
-          </div>
-
-          {/* Recent Reports */}
-          <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8">
-            <h2 className="text-3xl font-black text-gray-900 mb-6">
-              Your Recent Reports ({reports.length})
-            </h2>
-
-            {reports.length === 0 ? (
-              <div className="text-center py-8">
-                <Trash2 size={48} className="text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-600 font-semibold">
-                  No reports submitted yet
+              <div>
+                <p className="text-sm opacity-90">Welcome back,</p>
+                <p className="text-2xl font-bold">{userProfile.full_name || "User"}</p>
+                <p className="text-sm opacity-90">
+                  @{userProfile.username || "user"}
                 </p>
-                <p className="text-gray-500 text-sm mt-1">
-                  Start reporting issues to earn points and help clean Jamaica!
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {formattedReports.map((report) => (
-                  <div
-                    key={report.id}
-                    className="border border-gray-200 rounded-xl p-6 hover:border-green-400 hover:shadow-md transition-smooth"
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="text-lg font-bold text-gray-900">
-                            {report.title}
-                          </h3>
-                          <span className="text-xs bg-gray-200 px-2 py-1 rounded-full text-gray-700">
-                            {report.type}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 text-gray-600 mb-3">
-                          <MapPin size={16} />
-                          <span className="text-sm">{report.location}</span>
-                        </div>
-                      </div>
-
-                      {/* Status Badge */}
-                      <div className="flex flex-col items-end gap-2">
-                        <span
-                          className={`px-4 py-2 rounded-full font-semibold text-sm ${
-                            report.status === "completed"
-                              ? "bg-green-100 text-green-700"
-                              : report.status === "resolved"
-                              ? "bg-blue-100 text-blue-700"
-                              : report.status === "assigned"
-                              ? "bg-purple-100 text-purple-700"
-                              : report.status === "in_progress"
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-gray-100 text-gray-700"
-                          }`}
-                        >
-                          {report.status === "completed"
-                            ? "✓ Completed"
-                            : report.status === "resolved"
-                            ? "✓ Resolved"
-                            : report.status === "assigned"
-                            ? "→ Assigned"
-                            : report.status === "in_progress"
-                            ? "⧖ In Progress"
-                            : "⏳ " +
-                              report.status?.charAt(0).toUpperCase() +
-                              report.status?.slice(1)}
-                        </span>
-                        <span
-                          className={`text-xs px-2 py-1 rounded-full font-semibold ${
-                            report.priority === "urgent"
-                              ? "bg-red-100 text-red-700"
-                              : report.priority === "high"
-                              ? "bg-orange-100 text-orange-700"
-                              : report.priority === "medium"
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-green-100 text-green-700"
-                          }`}
-                        >
-                          {report.priority?.toUpperCase()}
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="text-sm text-gray-500">{report.date}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {reports.length > 5 && (
-              <button className="w-full mt-6 py-3 text-green-600 font-bold border-2 border-green-600 rounded-lg hover:bg-green-50 transition-smooth">
-                View All Reports ({reports.length})
-              </button>
-            )}
-          </div>
-
-          {/* Points and Events */}
-          <div className="mt-10 grid md:grid-cols-2 gap-6">
-            {/* Points Summary */}
-            <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8">
-              <h2 className="text-2xl font-black text-gray-900 mb-6">
-                Points Summary
-              </h2>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center pb-4 border-b">
-                  <span className="text-gray-700 font-semibold">
-                    Total Points Available
-                  </span>
-                  <span className="text-2xl font-black text-green-600">
-                    {stats.totalPoints}
-                  </span>
-                </div>
-                <div className="text-sm text-gray-600 space-y-2">
-                  <p>• 100 points = $5 cash credit</p>
-                  <p>• 50 points = Discount voucher</p>
-                  <p>• 150 points = Achievement badge</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Upcoming Events */}
-            <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8">
-              <h2 className="text-2xl font-black text-gray-900 mb-6">
-                Coming Soon
-              </h2>
-              <div className="space-y-4">
-                <div className="bg-green-50 border-l-4 border-green-600 p-4 rounded">
-                  <p className="font-semibold text-gray-900 mb-1">
-                    🌍 Community Cleanup Day
-                  </p>
-                  <p className="text-sm text-gray-600">October 30, 2025</p>
-                  <p className="text-sm text-green-600 font-semibold mt-2">
-                    +100 bonus points!
-                  </p>
-                </div>
-                <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded">
-                  <p className="font-semibold text-gray-900 mb-1">
-                    ♻️ Recycling Challenge
-                  </p>
-                  <p className="text-sm text-gray-600">November 15, 2025</p>
-                  <p className="text-sm text-blue-600 font-semibold mt-2">
-                    Compete with others!
-                  </p>
-                </div>
               </div>
             </div>
           </div>
+        ) : null}
+
+        {/* Quick Actions */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-black text-gray-900 mb-4">
+            Quick Actions
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Report an Issue */}
+            <Link
+              href="/dashboard/reports/new"
+              className="bg-white rounded-2xl shadow-md border border-gray-200 p-6 hover:shadow-lg hover:border-green-400 transition-all cursor-pointer group"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="bg-green-100 p-3 rounded-lg group-hover:bg-green-200 transition-colors">
+                  <Trash2 className="text-green-600" size={28} />
+                </div>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">
+                Report an Issue
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Report garbage issues in your area
+              </p>
+              <div className="flex items-center gap-2 text-green-600 font-bold">
+                <Plus size={18} />
+                New Report
+              </div>
+            </Link>
+
+            {/* Pickup Schedule */}
+            <Link
+              href="/dashboard/schedule"
+              className="bg-white rounded-2xl shadow-md border border-gray-200 p-6 hover:shadow-lg hover:border-blue-400 transition-all cursor-pointer group"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="bg-blue-100 p-3 rounded-lg group-hover:bg-blue-200 transition-colors">
+                  <Calendar className="text-blue-600" size={28} />
+                </div>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">
+                Pickup Schedule
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                View garbage collection schedules
+              </p>
+              <div className="flex items-center gap-2 text-blue-600 font-bold">
+                <Calendar size={18} />
+                View Schedule
+              </div>
+            </Link>
+
+            {/* Redeem Points */}
+            <Link
+              href="/dashboard/rewards"
+              className="bg-white rounded-2xl shadow-md border border-gray-200 p-6 hover:shadow-lg hover:border-purple-400 transition-all cursor-pointer group"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="bg-purple-100 p-3 rounded-lg group-hover:bg-purple-200 transition-colors">
+                  <Gift className="text-purple-600" size={28} />
+                </div>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">
+                Redeem Points
+              </h3>
+              <p className="text-gray-600 text-sm mb-4">
+                Earn and redeem points for contributions
+              </p>
+              <div className="flex items-center gap-2 text-purple-600 font-bold">
+                <Gift size={18} />
+                View Rewards
+              </div>
+            </Link>
+          </div>
+        </div>
+
+        {/* Statistics */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-black text-gray-900 mb-4">
+            Your Activity
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Total Reports */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-all">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-gray-600 text-sm font-semibold">
+                  Total Reports
+                </p>
+                <Trash2 className="text-green-600" size={20} />
+              </div>
+              <p className="text-3xl font-black text-gray-900">
+                {stats.totalReports}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Issues reported</p>
+            </div>
+
+            {/* Pending Reports */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-all">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-gray-600 text-sm font-semibold">Pending</p>
+                <Clock className="text-yellow-600" size={20} />
+              </div>
+              <p className="text-3xl font-black text-yellow-600">
+                {stats.pendingReports}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Awaiting review</p>
+            </div>
+
+            {/* Resolved Reports */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-all">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-gray-600 text-sm font-semibold">Resolved</p>
+                <CheckCircle className="text-green-600" size={20} />
+              </div>
+              <p className="text-3xl font-black text-green-600">
+                {stats.resolvedReports}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Issues resolved</p>
+            </div>
+
+            {/* Total Points */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-all">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-gray-600 text-sm font-semibold">
+                  Total Points
+                </p>
+                <TrendingUp className="text-purple-600" size={20} />
+              </div>
+              <p className="text-3xl font-black text-purple-600">
+                {stats.totalPoints}
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Points earned</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Getting Started Guide */}
+        <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8 mb-8">
+          <h2 className="text-2xl font-black text-gray-900 mb-6">
+            Getting Started
+          </h2>
+
+          <div className="space-y-4">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-green-100 text-green-600 rounded-full flex items-center justify-center font-bold flex-shrink-0">
+                1
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Report Issues</h3>
+                <p className="text-gray-600 text-sm">
+                  Found garbage or waste? Click "Report an Issue" to help keep
+                  Jamaica clean.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold flex-shrink-0">
+                2
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Check Schedules</h3>
+                <p className="text-gray-600 text-sm">
+                  View pickup schedules for your area to know when waste
+                  collection happens.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center font-bold flex-shrink-0">
+                3
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Earn Rewards</h3>
+                <p className="text-gray-600 text-sm">
+                  Complete tasks and reports to earn points that can be redeemed
+                  for rewards.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Call to Action */}
+        <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-2xl shadow-md p-8 text-center">
+          <h3 className="text-2xl font-black mb-3">Ready to Make a Difference?</h3>
+          <p className="mb-6 opacity-90">
+            Report garbage issues in your area and help build a cleaner Jamaica
+          </p>
+          <Link
+            href="/dashboard/reports/new"
+            className="inline-block bg-white text-green-600 px-8 py-3 rounded-lg font-bold hover:bg-gray-100 transition-colors"
+          >
+            <Plus size={20} className="inline mr-2" />
+            Report Now
+          </Link>
         </div>
       </div>
     </div>
