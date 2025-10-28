@@ -2,11 +2,10 @@
  * ===================================
  * FILE PATH: app/dashboard/reports/new/page.tsx
  * ===================================
- *
+ * 
  * New report submission page allowing users to report garbage issues
- * with location, photos, type, and priority selection.
- * UPDATED: Location dropdown now loads dynamically from /api/location
- * and stores location_id instead of name.
+ * with location, photos, type, and priority selection
+ * MODIFIED: Now displays logged-in user profile at the top
  */
 
 "use client";
@@ -26,6 +25,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getStoredUser } from "@/lib/auth";
+import { supabase } from "@/lib/supabaseClient";
 
 interface FormData {
   description: string;
@@ -33,7 +33,7 @@ interface FormData {
   priority: string;
   street: string;
   community: string;
-  location_id: string;
+  parish: string;
   latitude: string;
   longitude: string;
 }
@@ -50,12 +50,6 @@ interface UserProfile {
   email: string;
   username: string;
   avatar_url: string | null;
-}
-
-interface location {
-  location_id: string;
-  name: string;
-  parish: string;
 }
 
 const REPORT_TYPES = [
@@ -75,6 +69,23 @@ const PRIORITY_LEVELS = [
   { value: "urgent", label: "Urgent", color: "bg-red-100 text-red-700" },
 ];
 
+const PARISHES = [
+  "Kingston",
+  "Saint Andrew",
+  "Saint Thomas",
+  "Saint Catherine",
+  "Portland",
+  "Saint Mary",
+  "Saint Ann",
+  "Trelawny",
+  "Saint James",
+  "Hanover",
+  "Westmoreland",
+  "Saint Elizabeth",
+  "Manchester",
+  "Clarendon",
+];
+
 export default function NewReportPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -85,13 +96,11 @@ export default function NewReportPage() {
     priority: "medium",
     street: "",
     community: "",
-    location_id: "",
+    parish: "",
     latitude: "",
     longitude: "",
   });
 
-  const [location, setLocations] = useState<location[]>([]);
-  const [loadingLocations, setLoadingLocations] = useState(true);
   const [photos, setPhotos] = useState<PhotoFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -112,17 +121,21 @@ export default function NewReportPage() {
           return;
         }
 
-        const response = await fetch(`/api/user/profile?authId=${storedUser.id}`);
-        if (!response.ok) {
-          const data = await response.json();
-          console.error("Failed to load user profile:", data.error);
+        // Fetch user profile from database
+        const { data: profileData, error: profileError } = await supabase
+          .from("users")
+          .select("user_id, full_name, email, username, avatar_url")
+          .eq("auth_id", storedUser.id)
+          .single();
+
+        if (profileError || !profileData) {
+          console.error("Failed to load user profile:", profileError);
           setError("Failed to load your profile. Please try again.");
           setLoadingUser(false);
           return;
         }
 
-        const data = await response.json();
-        setUserProfile(data.profile as UserProfile);
+        setUserProfile(profileData as UserProfile);
         setLoadingUser(false);
       } catch (error: any) {
         console.error("Error fetching user profile:", error.message);
@@ -133,26 +146,6 @@ export default function NewReportPage() {
 
     fetchUserProfile();
   }, [router]);
-
-  // ==================== FETCH LOCATIONS ====================
-
-  useEffect(() => {
-    const fetchLocations = async () => {
-      try {
-        const response = await fetch("/api/location");
-        const data = await response.json();
-
-        if (!data.success) throw new Error(data.error || "Failed to load locations");
-        setLocations(data.data || []);
-      } catch (error: any) {
-        console.error("Error fetching locations:", error.message);
-      } finally {
-        setLoadingLocations(false);
-      }
-    };
-
-    fetchLocations();
-  }, []);
 
   // ==================== FORM HANDLERS ====================
 
@@ -175,6 +168,7 @@ export default function NewReportPage() {
       for (let i = 0; i < Math.min(files.length, 5 - photos.length); i++) {
         const file = files[i];
 
+        // Validate file
         if (!file.type.startsWith("image/")) {
           setError("Only image files are allowed");
           continue;
@@ -185,6 +179,7 @@ export default function NewReportPage() {
           continue;
         }
 
+        // Create preview
         const preview = URL.createObjectURL(file);
         const photoId = `${Date.now()}-${i}`;
 
@@ -240,8 +235,8 @@ export default function NewReportPage() {
       return false;
     }
 
-    if (!formData.location_id) {
-      setError("Please select a location");
+    if (!formData.parish) {
+      setError("Please select a parish");
       return false;
     }
 
@@ -263,7 +258,10 @@ export default function NewReportPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!validateForm()) return;
+    if (!validateForm()) {
+      return;
+    }
+
     if (!userProfile) {
       setError("User profile not loaded. Please refresh the page.");
       return;
@@ -273,30 +271,56 @@ export default function NewReportPage() {
     setError("");
 
     try {
-      const apiFormData = new FormData();
-      apiFormData.append("userId", userProfile.user_id);
-      apiFormData.append("description", formData.description);
-      apiFormData.append("report_type", formData.report_type);
-      apiFormData.append("priority", formData.priority);
-      apiFormData.append("street", formData.street);
-      apiFormData.append("community", formData.community);
-      apiFormData.append("location_id", formData.location_id);
-      apiFormData.append("latitude", formData.latitude);
-      apiFormData.append("longitude", formData.longitude);
+      // Upload photos to Supabase storage
+      const photoUrls: string[] = [];
 
-      photos.forEach((photo, index) => {
-        apiFormData.append(`photos[${index}]`, photo.file);
-      });
+      for (const photo of photos) {
+        const fileName = `${Date.now()}-${photo.file.name}`;
+        const filePath = `reports/${userProfile.user_id}/${fileName}`;
 
-      const response = await fetch("/api/reports", {
-        method: "POST",
-        body: apiFormData,
-      });
+        const { data, error: uploadError } = await supabase.storage
+          .from("reports")
+          .upload(filePath, photo.file);
 
-      const data = await response.json();
+        if (uploadError) {
+          setError("Failed to upload photo: " + uploadError.message);
+          setLoading(false);
+          return;
+        }
 
-      if (!response.ok) {
-        setError(data.error || "Failed to submit report");
+        // Get public URL
+        const { data: publicData } = supabase.storage
+          .from("reports")
+          .getPublicUrl(filePath);
+
+        photoUrls.push(publicData.publicUrl);
+      }
+
+      // Create report in database
+      const { data: reportData, error: reportError } = await supabase
+        .from("reports")
+        .insert([
+          {
+            user_id: userProfile.user_id,
+            description: formData.description,
+            report_type: formData.report_type,
+            priority: formData.priority,
+            street: formData.street,
+            community: formData.community,
+            parish: formData.parish,
+            latitude: parseFloat(formData.latitude),
+            longitude: parseFloat(formData.longitude),
+            location: `${formData.street}, ${formData.community}, ${formData.parish}`,
+            photo_url: photoUrls[0] || null,
+            status: "pending",
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select()
+        .single();
+
+      if (reportError) {
+        setError("Failed to create report: " + reportError.message);
         setLoading(false);
         return;
       }
@@ -304,8 +328,9 @@ export default function NewReportPage() {
       setSuccess(true);
       setLoading(false);
 
+      // Redirect after success
       setTimeout(() => {
-        router.push(`/dashboard/reports/${data.report.report_id}`);
+        router.push(`/dashboard/reports/${reportData.report_id}`);
       }, 2000);
     } catch (error: any) {
       console.error("❌ Error submitting report:", error);
@@ -314,7 +339,7 @@ export default function NewReportPage() {
     }
   };
 
-  // ==================== LOADING STATES ====================
+  // ==================== LOADING STATE ====================
 
   if (loadingUser) {
     return (
@@ -327,96 +352,90 @@ export default function NewReportPage() {
     );
   }
 
-  // ==================== SUCCESS STATE ====================
-
-  if (success) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="text-center max-w-md">
-          <div className="bg-white rounded-2xl shadow-lg p-8">
-            <CheckCircle size={64} className="text-green-600 mx-auto mb-4" />
-            <h2 className="text-2xl font-black text-gray-900 mb-3">
-              Report Submitted Successfully! ✅
-            </h2>
-            <p className="text-gray-600 mb-6">
-              Thank you for reporting this issue. Our team will review it shortly.
-            </p>
-            <p className="text-sm text-gray-500">Redirecting...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ==================== MAIN FORM ====================
-
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4">
+    <div className="min-h-screen bg-gray-50 pt-20 pb-12 px-4">
       <div className="max-w-2xl mx-auto">
         {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
+        <div className="mb-8">
           <Link
             href="/dashboard/reports"
-            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+            className="text-green-600 font-bold mb-4 flex items-center gap-2 hover:text-green-700"
           >
-            <ArrowLeft size={24} className="text-gray-600" />
+            <ArrowLeft size={20} />
+            Back to Reports
           </Link>
-          <div>
-            <h1 className="text-3xl font-black text-gray-900">Report Issue</h1>
-            <p className="text-gray-600">
-              Help us keep the community clean by reporting garbage issues
-            </p>
-          </div>
+          <h1 className="text-4xl font-black text-gray-900 mb-2">
+            Report a Garbage Issue
+          </h1>
+          <p className="text-gray-600">
+            Help us keep Jamaica clean by reporting issues in your area
+          </p>
         </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-8 flex gap-3">
-            <AlertCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
-            <p className="text-red-700 font-medium">{error}</p>
+        {/* User Profile Card */}
+        {userProfile && (
+          <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-2xl shadow-md p-6 mb-8">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-white text-green-600 rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0">
+                {userProfile.full_name
+                  ?.split(" ")
+                  .map((n) => n[0])
+                  .join("")
+                  .toUpperCase() || "U"}
+              </div>
+              <div>
+                <p className="text-sm opacity-90">Report submitted by:</p>
+                <p className="text-xl font-bold">{userProfile.full_name}</p>
+                <p className="text-sm opacity-90">{userProfile.email}</p>
+              </div>
+            </div>
           </div>
         )}
 
-        {userProfile && (
-          <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-6 mb-8 flex items-center gap-4">
-            {userProfile.avatar_url ? (
-              <img
-                src={userProfile.avatar_url}
-                alt={userProfile.full_name}
-                className="w-16 h-16 rounded-full object-cover"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
-                <User size={32} className="text-green-600" />
-              </div>
-            )}
+        {/* Success Message */}
+        {success && (
+          <div className="mb-8 bg-green-50 border border-green-200 rounded-xl p-6 flex gap-3">
+            <CheckCircle className="text-green-600 flex-shrink-0" size={24} />
             <div>
-              <p className="text-sm text-gray-600">Logged in as</p>
-              <p className="text-lg font-bold text-gray-900">{userProfile.full_name}</p>
-              <p className="text-sm text-gray-500">{userProfile.email}</p>
+              <h3 className="text-lg font-bold text-green-900">Success!</h3>
+              <p className="text-green-700 mt-2">
+                Your report has been submitted successfully. Redirecting...
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <div className="mb-8 bg-red-50 border border-red-200 rounded-xl p-6 flex gap-3">
+            <AlertCircle className="text-red-600 flex-shrink-0" size={24} />
+            <div>
+              <h3 className="text-lg font-bold text-red-900">Error</h3>
+              <p className="text-red-700 mt-2">{error}</p>
             </div>
           </div>
         )}
 
         <form onSubmit={handleSubmit}>
-          {/* Report Details */}
+          {/* Issue Details */}
           <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8 mb-8">
-            <h2 className="text-2xl font-black text-gray-900 mb-6">
-              Report Details
+            <h2 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-3">
+              <Trash2 size={28} className="text-green-600" />
+              Issue Details
             </h2>
 
             {/* Description */}
             <div className="mb-6">
               <label className="block text-sm font-bold text-gray-700 mb-3">
-                Describe the issue *
+                Describe the Issue *
               </label>
               <textarea
                 name="description"
                 value={formData.description}
                 onChange={handleInputChange}
-                placeholder="What did you see? Be specific and detailed..."
-                minLength={10}
-                rows={4}
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black placeholder:text-gray-400"
+                placeholder="Describe the garbage issue, size, condition, etc."
+                rows={5}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none resize-none text-black placeholder:text-gray-400"
               />
               <p className="text-xs text-gray-500 mt-2">
                 Minimum 10 characters, be specific and descriptive
@@ -434,9 +453,7 @@ export default function NewReportPage() {
                 onChange={handleInputChange}
                 className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black"
               >
-                <option value="" className="text-gray-400">
-                  Select a type...
-                </option>
+                <option value="" className="text-gray-400">Select a type...</option>
                 {REPORT_TYPES.map((type) => (
                   <option key={type} value={type}>
                     {type}
@@ -463,7 +480,7 @@ export default function NewReportPage() {
                     }
                     className={`px-4 py-3 rounded-lg font-bold transition-all ${
                       formData.priority === level.value
-                        ? `${level.color} ring-2 ring-offset-2`
+                        ? `${level.color} ring-2 ring-offset-2 ring-${level.value}-600`
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                     }`}
                   >
@@ -474,37 +491,31 @@ export default function NewReportPage() {
             </div>
           </div>
 
-          {/* Location Section */}
+          {/* Location */}
           <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8 mb-8">
             <h2 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-3">
               <MapPin size={28} className="text-green-600" />
               Location
             </h2>
 
-            {/* Location Dropdown */}
+            {/* Parish */}
             <div className="mb-6">
               <label className="block text-sm font-bold text-gray-700 mb-3">
-                Select Location *
+                Parish *
               </label>
-              {loadingLocations ? (
-                <p className="text-gray-500">Loading locations...</p>
-              ) : (
-                <select
-                  name="location_id"
-                  value={formData.location_id}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black"
-                >
-                  <option value="" className="text-gray-400">
-                    Choose a location...
+              <select
+                name="parish"
+                value={formData.parish}
+                onChange={handleInputChange}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black"
+              >
+                <option value="" className="text-gray-400">Select a parish...</option>
+                {PARISHES.map((parish) => (
+                  <option key={parish} value={parish}>
+                    {parish}
                   </option>
-                  {location.map((loc) => (
-                    <option key={loc.location_id} value={loc.location_id}>
-                      {loc.name} — {loc.parish}
-                    </option>
-                  ))}
-                </select>
-              )}
+                ))}
+              </select>
             </div>
 
             {/* Community */}
@@ -555,28 +566,28 @@ export default function NewReportPage() {
                   className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black placeholder:text-gray-400"
                 />
               </div>
-             
-            </div>
               <div>
-              <label className="block text-sm font-bold text-gray-700 mb-3">
-                Longitude *
-              </label>
-              <input
-                type="number"
-                name="longitude"
-                value={formData.longitude}
-                onChange={handleInputChange}
-                placeholder="e.g., -76.8023"
-                step="0.00001"
-                min="-180"
-                max="180"
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black placeholder:text-gray-400"
-              />
+                <label className="block text-sm font-bold text-gray-700 mb-3">
+                  Longitude *
+                </label>
+                <input
+                  type="number"
+                  name="longitude"
+                  value={formData.longitude}
+                  onChange={handleInputChange}
+                  placeholder="e.g., -76.8023"
+                  step="0.00001"
+                  min="-180"
+                  max="180"
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-600 focus:outline-none text-black placeholder:text-gray-400"
+                />
+              </div>
             </div>
 
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <p className="text-sm text-blue-700">
-                💡 Tip: Use your phone's GPS or Google Maps to get coordinates.
+                💡 Tip: Use your phone's GPS coordinates or click on a location in Google Maps
+                to get the exact latitude and longitude.
               </p>
             </div>
           </div>
@@ -588,6 +599,7 @@ export default function NewReportPage() {
               Photos ({photos.length}/5)
             </h2>
 
+            {/* Upload Area */}
             <div className="mb-6">
               <label className="block border-2 border-dashed border-green-300 rounded-xl p-8 text-center cursor-pointer hover:bg-green-50 transition-colors">
                 <input
@@ -609,6 +621,7 @@ export default function NewReportPage() {
               </label>
             </div>
 
+            {/* Photos Grid */}
             {photos.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {photos.map((photo) => (
@@ -631,7 +644,7 @@ export default function NewReportPage() {
             )}
           </div>
 
-          {/* Submit */}
+          {/* Submit Button */}
           <div className="flex gap-4">
             <Link
               href="/dashboard/reports"

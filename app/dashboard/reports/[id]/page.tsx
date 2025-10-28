@@ -2,9 +2,13 @@
  * ===================================
  * FILE PATH: app/dashboard/reports/[id]/page.tsx
  * ===================================
+ *
+ * Description:
+ * Displays a detailed view of an individual report using the API route (/api/reports/[id]).
+ * Fetches data securely from Supabase via the API route instead of client-side queries.
+ * Includes CleanJamaica green look & feel, loading and error states.
  * 
- * Individual report detail page showing complete report information
- * with status history and resolution notes
+ * Updated to work with vw_user_report_detail view
  */
 
 "use client";
@@ -13,89 +17,86 @@ import {
   ArrowLeft,
   AlertCircle,
   MapPin,
-  Calendar,
   CheckCircle,
   Clock,
   Image as ImageIcon,
+  User,
+  Mail,
+  MapPinned,
 } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { getStoredUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabaseClient";
 
 interface Report {
   report_id: string;
   user_id: string;
-  location: string;
-  latitude: number;
-  longitude: number;
-  description: string;
+  auth_id: string;
   report_type: string;
-  photo_url: string | null;
+  description: string;
   status: string;
   priority: string;
-  created_at: string;
+  submitted_at: string;
   resolved_at: string | null;
-  resolution_notes: string | null;
+  location_id: string;
+  location_street: string;
+  location_community: string;
+  location_parish: string;
+  report_latitude: number | null;
+  report_longitude: number | null;
+  location_latitude: number | null;
+  location_longitude: number | null;
+  full_name: string;
+  email: string;
+  username: string;
+  avatar_url: string | null;
+  photo_urls: string[] | null;
+  photo_filepaths: string[] | null;
+  report_street: string;
+  report_community: string;
 }
 
-interface PageProps {
-  params: {
-    id: string;
-  };
-}
-
-export default function ReportDetailPage({ params }: PageProps) {
+export default function ReportDetailPage() {
   const router = useRouter();
-  const reportId = params.id;
+  const { id } = useParams();
+  const reportId = id as string;
 
   const [loading, setLoading] = useState(true);
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
 
-  // ==================== FETCH REPORT ====================
-
+  // ==================== FETCH REPORT VIA API ROUTE ====================
   useEffect(() => {
+    if (!reportId) return;
+
     const fetchReport = async () => {
       try {
         setLoading(true);
         setError("");
 
         const storedUser = getStoredUser();
-
         if (!storedUser) {
           router.push("/login");
           return;
         }
 
-        // Fetch report by ID
-        const { data: reportData, error: reportError } = await supabase
-          .from("reports")
-          .select("*")
-          .eq("report_id", reportId)
-          .single();
+        const response = await fetch(`/api/reports/${reportId}`, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${storedUser.access_token}`,
+          },
+        });
 
-        if (reportError || !reportData) {
-          setError("Report not found");
+        const { success, data, error: apiError } = await response.json();
+
+        if (!success || !data) {
+          setError(apiError || "Report not found");
           setLoading(false);
           return;
         }
 
-        // Verify user owns this report
-        const { data: userProfile } = await supabase
-          .from("users")
-          .select("user_id")
-          .eq("auth_id", storedUser.id)
-          .single();
-
-        if (userProfile?.user_id !== reportData.user_id) {
-          setError("You don't have permission to view this report");
-          setLoading(false);
-          return;
-        }
-
-        setReport(reportData as Report);
+        setReport(data);
         setLoading(false);
       } catch (error: any) {
         console.error("❌ Unexpected error:", error.message);
@@ -107,8 +108,7 @@ export default function ReportDetailPage({ params }: PageProps) {
     fetchReport();
   }, [router, reportId]);
 
-  // ==================== HELPER FUNCTIONS ====================
-
+  // ==================== STATUS COLOR HELPERS ====================
   const getStatusColor = (status: string) => {
     const colors: { [key: string]: string } = {
       pending: "bg-yellow-100 text-yellow-700 border-yellow-300",
@@ -131,7 +131,6 @@ export default function ReportDetailPage({ params }: PageProps) {
   };
 
   // ==================== LOADING STATE ====================
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -144,7 +143,6 @@ export default function ReportDetailPage({ params }: PageProps) {
   }
 
   // ==================== ERROR STATE ====================
-
   if (error || !report) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -167,6 +165,7 @@ export default function ReportDetailPage({ params }: PageProps) {
     );
   }
 
+  // ==================== MAIN CONTENT ====================
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -206,8 +205,8 @@ export default function ReportDetailPage({ params }: PageProps) {
 
         {/* Main Details */}
         <div className="grid md:grid-cols-3 gap-8 mb-8">
-          {/* Left Column - Main Info */}
           <div className="md:col-span-2">
+            {/* Issue Description */}
             <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8 mb-8">
               <h2 className="text-2xl font-black text-gray-900 mb-6">Issue Description</h2>
 
@@ -228,70 +227,67 @@ export default function ReportDetailPage({ params }: PageProps) {
 
                 <div>
                   <p className="text-sm text-gray-600 font-semibold mb-2">Location</p>
-                  <div className="flex items-center gap-2 text-lg text-gray-900">
-                    <MapPin size={20} />
-                    {report.location}
+                  <div className="flex items-start gap-2 text-lg text-gray-900">
+                    <MapPin size={20} className="mt-1 flex-shrink-0" />
+                    <div>
+                      <p>
+                        {report.location_street || report.report_street || "N/A"}
+                        {report.location_community && `, ${report.location_community}`}
+                      </p>
+                      <p className="text-sm text-gray-600 font-normal">
+                        {report.location_parish && `Parish: ${report.location_parish}`}
+                      </p>
+                      {(report.report_latitude || report.report_longitude) && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          📍 {report.report_latitude?.toFixed(4)}, {report.report_longitude?.toFixed(4)}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs text-gray-500 mt-2">
-                    📍 {report.latitude.toFixed(4)}, {report.longitude.toFixed(4)}
-                  </p>
                 </div>
               </div>
             </div>
 
             {/* Photo Section */}
-            {report.photo_url ? (
+            {report.photo_urls && report.photo_urls.length > 0 ? (
               <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8 mb-8">
                 <h2 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-3">
                   <ImageIcon size={28} />
                   Photo Evidence
                 </h2>
-                <img
-                  src={report.photo_url}
-                  alt="Report evidence"
-                  className="w-full rounded-lg object-cover max-h-96"
-                />
+                <div className="grid grid-cols-1 gap-4">
+                  {report.photo_urls.map((photo, idx) => (
+                    <img
+                      key={idx}
+                      src={photo}
+                      alt={`Report evidence ${idx + 1}`}
+                      className="w-full rounded-lg object-cover max-h-96"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="bg-gray-100 rounded-2xl border-2 border-dashed border-gray-300 p-8 mb-8 text-center">
                 <ImageIcon size={48} className="text-gray-400 mx-auto mb-3" />
-                <p className="text-gray-600 font-semibold">No photo attached</p>
+                <p className="text-gray-600 font-semibold">No photos attached</p>
               </div>
             )}
 
-            {/* Resolution Notes */}
+            {/* Resolution Status */}
             {report.resolved_at && (
               <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8">
                 <h2 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-3">
                   <CheckCircle size={28} className="text-green-600" />
                   Resolution Details
                 </h2>
-
-                <div className="space-y-6">
-                  <div>
-                    <p className="text-sm text-gray-600 font-semibold mb-2">
-                      Resolved Date
-                    </p>
-                    <p className="text-lg text-gray-900">
-                      {new Date(report.resolved_at).toLocaleDateString("en-US", {
-                        weekday: "long",
-                        year: "numeric",
-                        month: "long",
-                        day: "numeric",
-                      })}
-                    </p>
-                  </div>
-
-                  {report.resolution_notes && (
-                    <div>
-                      <p className="text-sm text-gray-600 font-semibold mb-2">
-                        Resolution Notes
-                      </p>
-                      <p className="text-gray-700 leading-relaxed p-4 bg-green-50 rounded-lg border border-green-200">
-                        {report.resolution_notes}
-                      </p>
-                    </div>
-                  )}
+                <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                  <p className="text-sm text-gray-600 font-semibold mb-1">Resolved On</p>
+                  <p className="text-gray-900 font-bold">
+                    {new Date(report.resolved_at).toLocaleString()}
+                  </p>
                 </div>
               </div>
             )}
@@ -323,17 +319,11 @@ export default function ReportDetailPage({ params }: PageProps) {
                   </p>
                 </div>
 
-                {/* Created Date */}
+                {/* Submitted */}
                 <div>
                   <p className="text-xs text-gray-600 font-semibold mb-2">Submitted</p>
                   <p className="text-sm text-gray-700">
-                    {new Date(report.created_at).toLocaleDateString("en-US", {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+                    {new Date(report.submitted_at).toLocaleString()}
                   </p>
                 </div>
 
@@ -342,11 +332,52 @@ export default function ReportDetailPage({ params }: PageProps) {
                   <p className="text-xs text-gray-600 font-semibold mb-2">Days Pending</p>
                   <p className="text-sm font-bold text-gray-900">
                     {Math.floor(
-                      (new Date().getTime() - new Date(report.created_at).getTime()) /
+                      (new Date().getTime() - new Date(report.submitted_at).getTime()) /
                         (1000 * 60 * 60 * 24)
                     )}{" "}
                     days
                   </p>
+                </div>
+
+                {/* Reporter Info */}
+                <div className="border-t border-gray-200 pt-6">
+                  <h3 className="text-sm font-black text-gray-900 mb-4 flex items-center gap-2">
+                    <User size={16} />
+                    Reporter
+                  </h3>
+                  <div className="space-y-3">
+                    {report.avatar_url && (
+                      <img
+                        src={report.avatar_url}
+                        alt={report.full_name}
+                        className="w-12 h-12 rounded-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                    )}
+                    <div>
+                      <p className="text-xs text-gray-600 font-semibold mb-1">Name</p>
+                      <p className="text-sm font-bold text-gray-900">{report.full_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-600 font-semibold mb-1 flex items-center gap-1">
+                        <Mail size={12} /> Email
+                      </p>
+                      <a
+                        href={`mailto:${report.email}`}
+                        className="text-sm text-blue-600 hover:underline break-all"
+                      >
+                        {report.email}
+                      </a>
+                    </div>
+                    {report.username && (
+                      <div>
+                        <p className="text-xs text-gray-600 font-semibold mb-1">Username</p>
+                        <p className="text-sm text-gray-700">@{report.username}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

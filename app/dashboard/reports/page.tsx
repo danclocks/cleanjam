@@ -1,14 +1,27 @@
 /**
- * ===================================
+ * ================================================================
  * FILE PATH: app/dashboard/reports/page.tsx
- * ===================================
  * 
- * Reports listing page showing all user's garbage reports
- * with filtering, status tracking, and management options
- * MODIFIED: Now displays logged-in user information in header
+ * PAGE ROUTE LINKS:
+ * - GET  /dashboard/reports              → Display all reports
+ * - GET  /dashboard/reports?status=X     → Display reports filtered by status
+ * - POST /dashboard/reports/new          → Navigate to create new report
+ * - GET  /dashboard/reports/[id]         → View individual report details
+ * ================================================================
+ *
+ * Reports listing page – API-based (no client-side Supabase calls)
+ * 
+ * Features:
+ * - Fetches from /api/reports/details endpoint (Supabase view)
+ * - Joins: reports → users → locations
+ * - Status filtering (all, pending, assigned, in_progress, completed, resolved)
+ * - Google Maps integration for location viewing
+ * - Fully responsive: mobile (320px+), tablet (768px+), desktop (1024px+)
+ * - CleanJamaica brand colors (green/emerald)
+ * - Comprehensive error logging for debugging
+ * 
+ * CleanJamaica Dashboard 2025
  */
-
-"use client";
 
 import {
   Trash2,
@@ -16,412 +29,395 @@ import {
   Calendar,
   AlertCircle,
   CheckCircle,
-  Clock,
   Filter,
   Plus,
   Eye,
-  User,
-  LogOut,
+  Map,
 } from "lucide-react";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { getStoredUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabaseClient";
 
-interface Report {
+export const dynamic = "force-dynamic"; // Ensure SSR freshness
+
+interface ReportView {
   report_id: string;
-  user_id: string;
-  location: string;
-  latitude: number;
-  longitude: number;
-  description: string;
   report_type: string;
-  photo_url: string | null;
+  description: string;
   status: string;
   priority: string;
   created_at: string;
   resolved_at: string | null;
-  resolution_notes: string | null;
+  location_name: string;
+  latitude: number | null;
+  longitude: number | null;
+  reporter_name: string;
+  reporter_email: string;
 }
 
-interface UserProfile {
-  user_id: string;
-  full_name: string;
-  email: string;
-  username: string;
-  avatar_url: string | null;
+interface ApiErrorResponse {
+  success: boolean;
+  message: string;
+  error?: string;
+  debug?: any;
 }
 
-type FilterStatus = "all" | "pending" | "assigned" | "in_progress" | "completed" | "resolved";
+/**
+ * Fetches reports from /api/reports/details endpoint
+ * @param filter - Status filter (all, pending, assigned, etc.)
+ * @returns Array of ReportView objects or null if error
+ */
+async function getReports(filter?: string): Promise<ReportView[] | null> {
+  try {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
 
-export default function ReportsPage() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [reports, setReports] = useState<Report[]>([]);
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
-  const [error, setError] = useState("");
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [showUserMenu, setShowUserMenu] = useState(false);
+    if (!baseUrl) {
+      console.error("❌ [ReportsPage] NEXT_PUBLIC_BASE_URL not set");
+      throw new Error("Missing NEXT_PUBLIC_BASE_URL environment variable");
+    }
 
-  // ==================== FETCH REPORTS & USER ====================
+    const url = filter && filter !== "all"
+      ? `${baseUrl}/api/details?status=${encodeURIComponent(filter)}`
+      : `${baseUrl}/api/details`;
 
-  useEffect(() => {
-    const fetchData = async () => {
+    console.log("📖 [ReportsPage] Fetching from:", url);
+
+    const res = await fetch(url, { 
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    console.log("   ├─ Response status:", res.status);
+    console.log("   ├─ Response headers:", Object.fromEntries(res.headers.entries()));
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error("   ├─ Response not OK");
+      console.error("   ├─ Status:", res.status, res.statusText);
+      console.error("   └─ Body:", errorText);
+
+      // Try to parse as JSON
       try {
-        setLoading(true);
-        setError("");
-
-        const storedUser = getStoredUser();
-
-        if (!storedUser) {
-          router.push("/login");
-          return;
+        const errorJson = JSON.parse(errorText) as ApiErrorResponse;
+        console.error("   └─ Error message:", errorJson.message);
+        if (errorJson.debug) {
+          console.error("   └─ Debug info:", errorJson.debug);
         }
-
-        // Fetch user profile
-        const { data: profileData, error: profileError } = await supabase
-          .from("users")
-          .select("user_id, full_name, email, username, avatar_url")
-          .eq("auth_id", storedUser.id)
-          .single();
-
-        if (profileError || !profileData) {
-          setError("Failed to load user profile");
-          setLoading(false);
-          return;
-        }
-
-        setUserProfile(profileData as UserProfile);
-
-        // Fetch all reports
-        let query = supabase
-          .from("reports")
-          .select("*")
-          .eq("user_id", profileData.user_id)
-          .order("created_at", { ascending: false });
-
-        if (filterStatus !== "all") {
-          query = query.eq("status", filterStatus);
-        }
-
-        const { data: reportsData, error: reportsError } = await query;
-
-        if (reportsError) {
-          console.warn("⚠️ Reports fetch warning:", reportsError.message);
-          setReports([]);
-        } else {
-          setReports(reportsData as Report[]);
-        }
-
-        setLoading(false);
-      } catch (error: any) {
-        console.error("❌ Unexpected error:", error.message);
-        setError("An unexpected error occurred");
-        setLoading(false);
+        throw new Error(`API Error: ${errorJson.message}`);
+      } catch (parseErr) {
+        throw new Error(`API Error ${res.status}: ${res.statusText}`);
       }
-    };
-
-    fetchData();
-  }, [router, filterStatus]);
-
-  // ==================== HELPER FUNCTIONS ====================
-
-  const getStatusColor = (status: string) => {
-    const colors: { [key: string]: string } = {
-      pending: "bg-yellow-100 text-yellow-700",
-      assigned: "bg-blue-100 text-blue-700",
-      in_progress: "bg-purple-100 text-purple-700",
-      completed: "bg-green-100 text-green-700",
-      resolved: "bg-emerald-100 text-emerald-700",
-    };
-    return colors[status?.toLowerCase()] || "bg-gray-100 text-gray-700";
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status?.toLowerCase()) {
-      case "completed":
-      case "resolved":
-        return "✓";
-      case "in_progress":
-        return "⧖";
-      case "assigned":
-        return "→";
-      default:
-        return "⏳";
     }
-  };
 
-  const getPriorityColor = (priority: string) => {
-    const colors: { [key: string]: string } = {
-      urgent: "bg-red-100 text-red-700",
-      high: "bg-orange-100 text-orange-700",
-      medium: "bg-yellow-100 text-yellow-700",
-      low: "bg-green-100 text-green-700",
-    };
-    return colors[priority?.toLowerCase()] || "bg-gray-100 text-gray-700";
-  };
+    const responseText = await res.text();
+    console.log("   ├─ Raw response:", responseText.substring(0, 500));
 
-  const handleLogout = async () => {
+    let data: any;
     try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (response.ok) {
-        router.push("/login");
-      }
-    } catch (error) {
-      console.error("Logout error:", error);
+      data = JSON.parse(responseText);
+    } catch (parseErr) {
+      console.error("❌ Failed to parse response as JSON");
+      console.error("   └─ Response:", responseText);
+      throw new Error("Invalid JSON response from API");
     }
-  };
 
-  // ==================== LOADING STATE ====================
+    console.log("   ├─ Parsed response:", data);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 font-semibold">Loading reports...</p>
-        </div>
-      </div>
-    );
+    // Handle different response formats
+    let reports: ReportView[] = [];
+
+    if (Array.isArray(data)) {
+      // Direct array response
+      reports = data;
+      console.log("   └─ Response is array, got", reports.length, "items");
+    } else if (data.data && Array.isArray(data.data)) {
+      // Wrapped response {data: [...]}
+      reports = data.data;
+      console.log("   └─ Response is wrapped, got", reports.length, "items");
+    } else if (data.success === false) {
+      // Error response
+      throw new Error(data.message || "API returned error");
+    } else {
+      console.error("❌ Unexpected response format:", data);
+      throw new Error("Unexpected API response format");
+    }
+
+    // Validate data structure
+    console.log("   └─ Validating report structure...");
+    if (reports.length > 0) {
+      const firstReport = reports[0];
+      console.log("   ├─ First report keys:", Object.keys(firstReport));
+      console.log("   ├─ First report sample:", {
+        report_id: firstReport.report_id,
+        description: firstReport.description?.substring(0, 50),
+        latitude: firstReport.latitude,
+        longitude: firstReport.longitude,
+      });
+    }
+
+    console.log(`✅ [ReportsPage] Retrieved ${reports.length} reports`);
+    return reports;
+  } catch (error: any) {
+    console.error("❌ [ReportsPage] Error fetching reports:", error.message);
+    console.error("   └─ Full error:", error);
+    return null;
+  }
+}
+
+export default async function ReportsPage({
+  searchParams,
+}: {
+  searchParams?: { status?: string };
+}) {
+  const filterStatus = searchParams?.status || "all";
+  let reports: ReportView[] = [];
+  let fetchError: string | null = null;
+  let fetchErrorDetails: any = null;
+
+  console.log("🔄 [ReportsPage] Rendering with filter:", filterStatus);
+
+  try {
+    const result = await getReports(filterStatus);
+    if (result === null) {
+      fetchError = "Failed to load reports from API";
+      fetchErrorDetails = "Check browser console for detailed error";
+    } else {
+      reports = result;
+    }
+  } catch (error: any) {
+    console.error("❌ [ReportsPage] Caught error:", error.message);
+    fetchError = error.message || "Unknown error occurred while fetching reports";
+    fetchErrorDetails = error;
   }
 
-  // ==================== ERROR STATE ====================
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md">
-          <div className="flex gap-3">
-            <AlertCircle className="text-red-600 flex-shrink-0" size={24} />
-            <div>
-              <h3 className="text-lg font-bold text-red-900">Error</h3>
-              <p className="text-red-700 mt-2">{error}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const filteredReports =
-    filterStatus === "all"
-      ? reports
-      : reports.filter((r) => r.status === filterStatus);
+  const filteredCount = reports.length;
+  const totalCount = reports.length;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white py-8 px-4 md:px-8">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
-            {/* Left Section */}
-            <div className="flex items-center gap-3 min-w-0">
-              <Trash2 size={32} className="flex-shrink-0" />
-              <h1 className="text-3xl md:text-4xl font-black truncate">My Reports</h1>
+      {/* ===== HEADER SECTION ===== */}
+      <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white py-6 sm:py-8 px-4 sm:px-6 md:px-8">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          {/* Header Title */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex-shrink-0">
+              <Trash2 size={28} className="sm:w-8 sm:h-8" />
             </div>
-
-            {/* Right Section - New Report & User Menu */}
-            <div className="flex items-center gap-4 flex-shrink-0">
-              <Link
-                href="/dashboard/reports/new"
-                className="bg-white text-green-600 px-4 py-2 rounded-lg font-bold hover:bg-gray-100 transition-smooth"
-              >
-                <Plus size={20} className="inline mr-2" />
-                New Report
-              </Link>
-
-              {/* User Profile Dropdown */}
-              <div className="relative">
-               
-
-                {/* Dropdown Menu */}
-                {showUserMenu && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden z-50">
-                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-                      <p className="text-sm font-bold text-gray-900">
-                        {userProfile?.full_name || "User"}
-                      </p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        {userProfile?.email || ""}
-                      </p>
-                    </div>
-
-                    <div className="py-2">
-                      <Link
-                        href="/dashboard/profile"
-                        className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                        onClick={() => setShowUserMenu(false)}
-                      >
-                        <User size={16} className="inline mr-2" />
-                        View Profile
-                      </Link>
-                    </div>
-
-                    <div className="border-t border-gray-200 py-2">
-                      <button
-                        onClick={() => {
-                          setShowUserMenu(false);
-                          handleLogout();
-                        }}
-                        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                      >
-                        <LogOut size={16} />
-                        Sign Out
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-black truncate">
+                My Reports
+              </h1>
+              <p className="text-green-100 text-xs sm:text-sm mt-1">
+                Total Reports Logged:{" "}
+                <span className="font-bold text-white">{totalCount}</span>
+              </p>
             </div>
           </div>
-          <p className="text-green-100">Track all your garbage issue reports</p>
+
+          {/* New Report Button */}
+          <Link
+            href="/dashboard/reports/new"
+            className="inline-flex items-center justify-center bg-white text-green-600 px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg font-bold hover:bg-gray-100 transition duration-200 whitespace-nowrap"
+          >
+            <Plus size={18} className="mr-2 flex-shrink-0" />
+            <span>New Report</span>
+          </Link>
         </div>
+
+        {/* Subtitle */}
+        <p className="text-green-100 text-xs sm:text-sm mt-4">
+          Track all your garbage issue reports and view their locations.
+        </p>
       </div>
 
-      {/* Main Content */}
-      <div className="max-w-6xl mx-auto p-4 md:p-8">
-        {/* Filter Section */}
-        <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-6 mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <Filter size={24} className="text-green-600" />
-            <h2 className="text-xl font-bold text-gray-900">Filter Reports</h2>
+      {/* ===== MAIN CONTENT ===== */}
+      <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
+        {/* ===== FILTER SECTION ===== */}
+        <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-4 sm:p-6 mb-6 sm:mb-8">
+          <div className="flex items-center gap-2 sm:gap-3 mb-4">
+            <Filter size={20} className="sm:w-6 sm:h-6 text-green-600 flex-shrink-0" />
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900">Filter Reports</h2>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          {/* Filter Buttons - Responsive Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
             {["all", "pending", "assigned", "in_progress", "completed", "resolved"].map(
               (status) => (
-                <button
+                <Link
                   key={status}
-                  onClick={() => setFilterStatus(status as FilterStatus)}
-                  className={`px-4 py-2 rounded-lg font-semibold transition-smooth ${
+                  href={`/dashboard/reports?status=${status}`}
+                  className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg font-semibold text-center text-sm sm:text-base transition duration-200 ${
                     filterStatus === status
-                      ? "bg-green-600 text-white shadow-lg"
+                      ? "bg-green-600 text-white shadow-lg ring-2 ring-green-400"
                       : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                   }`}
                 >
                   {status.charAt(0).toUpperCase() + status.slice(1).replace("_", " ")}
-                </button>
+                </Link>
               )
             )}
           </div>
         </div>
 
-        {/* Reports List */}
-        <div className="space-y-4">
-          {filteredReports.length === 0 ? (
-            <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-12 text-center">
-              <Trash2 size={48} className="text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-600 font-semibold text-lg">No reports found</p>
-              <p className="text-gray-500 text-sm mt-2">
-                {filterStatus === "all"
-                  ? "Start by reporting an issue to help clean Jamaica!"
-                  : `No reports with status "${filterStatus.replace("_", " ")}"`}
+        {/* ===== REPORTS LIST ===== */}
+        {fetchError ? (
+          // Error State with Detailed Messages
+          <div className="space-y-4">
+            {/* Main Error Card */}
+            <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-red-200 p-8 sm:p-12 text-center">
+              <AlertCircle size={40} className="sm:w-12 sm:h-12 text-red-400 mx-auto mb-4" />
+              <p className="text-red-600 font-semibold text-base sm:text-lg">
+                {fetchError}
+              </p>
+              <p className="text-gray-600 text-sm mt-2">
+                Please check the troubleshooting steps below or try refreshing the page
               </p>
             </div>
-          ) : (
-            filteredReports.map((report) => (
-              <Link key={report.report_id} href={`/dashboard/reports/${report.report_id}`}>
-                <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-6 hover:shadow-lg hover:border-green-400 transition-smooth cursor-pointer">
-                  <div className="grid md:grid-cols-2 gap-6">
-                    {/* Left Section */}
-                    <div>
-                      <div className="flex items-start gap-3 mb-4">
-                        <div className="flex-1">
-                          <h3 className="text-xl font-bold text-gray-900 mb-2">
-                            {report.description?.substring(0, 60) || report.report_type}
-                          </h3>
-                          <div className="flex items-center gap-2 text-gray-600 mb-2">
-                            <MapPin size={18} />
-                            <span>{report.location}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-gray-600">
-                            <Calendar size={18} />
-                            <span>
-                              {new Date(report.created_at).toLocaleDateString()}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
 
-                      {/* Badges */}
-                      <div className="flex gap-2 flex-wrap">
-                        <span className="text-xs bg-gray-200 px-3 py-1 rounded-full text-gray-700 font-semibold">
-                          {report.report_type}
-                        </span>
+            {/* Troubleshooting Card */}
+            <div className="bg-blue-50 rounded-xl sm:rounded-2xl border border-blue-200 p-6">
+              <div className="flex gap-3">
+                <div className="flex-shrink-0">
+                  <CheckCircle className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-blue-900 mb-3">Troubleshooting:</h3>
+                  <ul className="space-y-2 text-sm text-blue-800">
+                    <li>✓ Check that API endpoint <code className="bg-blue-100 px-2 py-1 rounded">/api/reports/details</code> exists</li>
+                    <li>✓ Verify Supabase view <code className="bg-blue-100 px-2 py-1 rounded">vw_user_report_detail</code> exists in your database</li>
+                    <li>✓ Check environment variables: <code className="bg-blue-100 px-2 py-1 rounded">NEXT_PUBLIC_BASE_URL</code></li>
+                    <li>✓ Open browser DevTools (F12) → Console tab for detailed error messages</li>
+                    <li>✓ Refresh the page (Ctrl+Shift+R) to reload with latest code</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Debug Info (Development Only) */}
+            {process.env.NODE_ENV === "development" && fetchErrorDetails && (
+              <div className="bg-gray-100 rounded-xl border border-gray-300 p-4">
+                <h4 className="font-bold text-gray-900 mb-2">Debug Information:</h4>
+                <pre className="text-xs text-gray-700 overflow-x-auto bg-gray-50 p-3 rounded">
+                  {JSON.stringify(fetchErrorDetails, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        ) : filteredCount === 0 ? (
+          // Empty State
+          <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-8 sm:p-12 text-center">
+            <Trash2 size={40} className="sm:w-12 sm:h-12 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-600 font-semibold text-base sm:text-lg">
+              No reports found
+            </p>
+            <p className="text-gray-500 text-sm mt-1">
+              {filterStatus !== "all" ? "Try a different filter" : "Start by creating a new report"}
+            </p>
+          </div>
+        ) : (
+          // Reports Grid
+          <div className="space-y-4 sm:space-y-6">
+            {reports.map((report) => (
+              <div
+                key={report.report_id}
+                className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-4 sm:p-6 hover:shadow-lg hover:border-green-400 transition duration-200"
+              >
+                {/* Report Card Content */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  {/* Left Column - Report Info */}
+                  <div className="space-y-3">
+                    {/* Report Title */}
+                    <h3 className="text-lg sm:text-xl font-bold text-gray-900 line-clamp-2">
+                      {report.description?.substring(0, 60) || report.report_type}
+                    </h3>
+
+                    {/* Location */}
+                    <div className="flex items-start gap-2 text-gray-600">
+                      <MapPin size={16} className="mt-0.5 flex-shrink-0 text-green-600" />
+                      <span className="text-sm sm:text-base break-words">
+                        {report.location_name}
+                      </span>
+                    </div>
+
+                    {/* Date */}
+                    <div className="flex items-center gap-2 text-gray-600">
+                      <Calendar size={16} className="flex-shrink-0 text-green-600" />
+                      <span className="text-sm sm:text-base">
+                        {new Date(report.created_at).toLocaleDateString("en-US", {
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </span>
+                    </div>
+
+                    {/* Reporter Info */}
+                    <p className="text-xs sm:text-sm text-gray-500 break-words">
+                      Submitted by <span className="font-medium">{report.reporter_name}</span>
+                      {" "}
+                      <span className="text-gray-400">({report.reporter_email})</span>
+                    </p>
+                  </div>
+
+                  {/* Right Column - Status & Actions */}
+                  <div className="flex flex-col justify-between md:text-right space-y-4">
+                    {/* Status Badge */}
+                    <div>
+                      <p className="text-xs sm:text-sm text-gray-600 mb-2 md:text-right">
+                        Status
+                      </p>
+                      <div className="flex justify-start md:justify-end">
                         <span
-                          className={`text-xs px-3 py-1 rounded-full font-semibold ${getPriorityColor(
-                            report.priority
-                          )}`}
+                          className={`inline-flex items-center px-3 sm:px-4 py-1.5 sm:py-2 rounded-full font-bold text-xs sm:text-sm ${
+                            report.status === "resolved"
+                              ? "bg-green-100 text-green-700"
+                              : report.status === "pending"
+                              ? "bg-yellow-100 text-yellow-700"
+                              : report.status === "assigned"
+                              ? "bg-blue-100 text-blue-700"
+                              : report.status === "in_progress"
+                              ? "bg-orange-100 text-orange-700"
+                              : "bg-gray-100 text-gray-700"
+                          }`}
                         >
-                          {report.priority?.toUpperCase() || "NORMAL"}
+                          {report.status.toUpperCase().replace("_", " ")}
                         </span>
                       </div>
                     </div>
 
-                    {/* Right Section */}
-                    <div className="flex flex-col justify-between">
-                      <div className="mb-4">
-                        <p className="text-sm text-gray-600 mb-2">Status</p>
-                        <div
-                          className={`inline-block px-4 py-2 rounded-full font-bold text-sm ${getStatusColor(
-                            report.status
-                          )}`}
+                    {/* Action Links */}
+                    <div className="flex flex-col sm:flex-row gap-3 md:justify-end">
+                      {report.latitude && report.longitude ? (
+                        <a
+                          href={`https://www.google.com/maps?q=${report.latitude},${report.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center px-3 sm:px-4 py-2 text-blue-600 font-bold hover:text-blue-700 hover:bg-blue-50 rounded-lg transition duration-200 text-sm sm:text-base"
                         >
-                          {getStatusIcon(report.status)}{" "}
-                          {report.status?.replace("_", " ").toUpperCase()}
-                        </div>
-                      </div>
-
-                      {report.resolved_at && (
-                        <div className="text-sm text-green-600 flex items-center gap-2">
-                          <CheckCircle size={18} />
-                          <span>
-                            Resolved on{" "}
-                            {new Date(report.resolved_at).toLocaleDateString()}
-                          </span>
+                          <Map size={16} className="mr-2 flex-shrink-0" />
+                          <span>Map</span>
+                        </a>
+                      ) : (
+                        <div className="inline-flex items-center px-3 sm:px-4 py-2 text-gray-400 font-bold rounded-lg text-sm">
+                          <Map size={16} className="mr-2 flex-shrink-0" />
+                          <span>No Map</span>
                         </div>
                       )}
 
-                      <div className="text-right mt-4">
-                        <button className="text-green-600 font-bold hover:text-green-700 flex items-center justify-end gap-2">
-                          View Details
-                          <Eye size={18} />
-                        </button>
-                      </div>
+                      <Link
+                        href={`/dashboard/reports/${report.report_id}`}
+                        className="inline-flex items-center justify-center px-3 sm:px-4 py-2 text-green-600 font-bold hover:text-green-700 hover:bg-green-50 rounded-lg transition duration-200 text-sm sm:text-base"
+                      >
+                        <Eye size={16} className="mr-2 flex-shrink-0" />
+                        <span>View</span>
+                      </Link>
                     </div>
                   </div>
                 </div>
-              </Link>
-            ))
-          )}
-        </div>
-
-        {/* Summary Stats */}
-        <div className="mt-10 grid md:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
-            <p className="text-gray-600 text-sm font-semibold mb-1">Total Reports</p>
-            <p className="text-3xl font-black text-gray-900">{reports.length}</p>
+              </div>
+            ))}
           </div>
-          <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
-            <p className="text-gray-600 text-sm font-semibold mb-1">Pending</p>
-            <p className="text-3xl font-black text-yellow-600">
-              {reports.filter((r) => r.status === "pending").length}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
-            <p className="text-gray-600 text-sm font-semibold mb-1">In Progress</p>
-            <p className="text-3xl font-black text-purple-600">
-              {reports.filter((r) => r.status === "in_progress").length}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
-            <p className="text-gray-600 text-sm font-semibold mb-1">Resolved</p>
-            <p className="text-3xl font-black text-green-600">
-              {reports.filter((r) => r.status === "resolved").length}
-            </p>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

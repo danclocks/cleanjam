@@ -78,7 +78,7 @@ export interface CollectionSchedule {
 /**
  * Reports Table - Garbage issues and illegal dumps
  */
-export interface Report {
+export interface reports {
   report_id: number
   user_id: number
   location: string

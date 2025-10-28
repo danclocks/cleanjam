@@ -24,7 +24,7 @@ export default function DashboardLayout({
   const handleSignOut = async () => {
     try {
       localStorage.removeItem('user');
-      router.push('/login');
+      router.push('./');
     } catch (error) {
       console.error('Sign out error:', error);
     }
