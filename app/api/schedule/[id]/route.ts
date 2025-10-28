@@ -1,206 +1,188 @@
-/**
- * COPY THIS FILE TO: app/api/schedule/[id]/route.ts
- * 
- * This is the INDIVIDUAL SCHEDULE OPERATIONS ROUTE
- * Handles: GET single schedule, PUT update schedule, DELETE schedule
- * 
- * ✅ DATABASE FIELDS CORRECTED:
- * - Changed: id → scheduleID
- * - Changed: status → inactive (0 = Active, 1 = Inactive)
- * - Removed: truckRoute (NOT in database)
- */
+// Filepath: app/api/schedule/[id]/route.ts
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
 
-// Mock database - same as main route, using CORRECT column names
-let schedules: any[] = [
-  {
-    scheduleID: 1,
-    community: "Downtown Kingston",
-    pickupDay: "Monday",
-    pickupTime: "06:00",
-    frequency: "Weekly",
-    inactive: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    scheduleID: 2,
-    community: "Downtown Kingston",
-    pickupDay: "Thursday",
-    pickupTime: "06:00",
-    frequency: "Weekly",
-    inactive: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    scheduleID: 3,
-    community: "Uptown Kingston",
-    pickupDay: "Tuesday",
-    pickupTime: "07:00",
-    frequency: "Weekly",
-    inactive: 0,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    scheduleID: 4,
-    community: "Uptown Kingston",
-    pickupDay: "Friday",
-    pickupTime: "07:00",
-    frequency: "Weekly",
-    inactive: 0,
-    createdAt: new Date().toISOString(),
-  },
-];
+// Type definitions based on schedule table schema
+interface Schedule {
+  scheduleID: number;
+  communityName: string;
+  pickupDay: string;
+  pickupTime: string;
+  frequency: string;
+  isActive: boolean;
+  notes: string | null;
+  createdAt: string;
+}
 
-// GET - Fetch single schedule
+interface ScheduleParams {
+  params: {
+    id: string;
+  };
+}
+
+interface ApiResponse {
+  success: boolean;
+  data?: Schedule | Schedule[];
+  error?: string;
+}
+
+// GET: Fetch a specific schedule by ID
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+  { params }: ScheduleParams
+): Promise<NextResponse<ApiResponse>> {
   try {
-    const scheduleID = parseInt(params.id);
-    console.log("GET /api/schedule/[id] - Fetching schedule:", scheduleID);
-    
-    const schedule = schedules.find((s) => s.scheduleID === scheduleID);
+    const scheduleID = params.id;
 
-    if (!schedule) {
+    if (!scheduleID || isNaN(Number(scheduleID))) {
       return NextResponse.json(
-        { message: "Schedule not found" },
-        { status: 404 }
+        {
+          success: false,
+          error: 'Invalid schedule ID',
+        },
+        { status: 400 }
       );
     }
 
+    // TODO: Replace with your actual database call
+    // Example: const schedule = await db.schedule.findUnique({ where: { scheduleID: parseInt(scheduleID) } });
+
+    const mockSchedule: Schedule = {
+      scheduleID: parseInt(scheduleID),
+      communityName: 'Sample Community',
+      pickupDay: 'Monday',
+      pickupTime: '09:00 AM',
+      frequency: 'WEEKLY',
+      isActive: true,
+      notes: 'Regular pickup schedule',
+      createdAt: new Date().toISOString(),
+    };
+
     return NextResponse.json(
       {
-        message: "Schedule fetched successfully",
-        schedule,
+        success: true,
+        data: mockSchedule,
       },
       { status: 200 }
     );
   } catch (error) {
-    console.error("GET /api/schedule/[id] error:", error);
+    console.error(`GET /api/schedule/[id] error:`, error);
     return NextResponse.json(
-      { message: "Internal server error" },
+      {
+        success: false,
+        error: 'Failed to fetch schedule',
+      },
       { status: 500 }
     );
   }
 }
 
-// PUT - Update schedule
+// PUT: Update a specific schedule by ID
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+  { params }: ScheduleParams
+): Promise<NextResponse<ApiResponse>> {
   try {
-    const scheduleID = parseInt(params.id);
-    const body = await request.json();
-    console.log("PUT /api/schedule/[id] - Updating schedule:", scheduleID, body);
+    const scheduleID = params.id;
 
-    const schedule = schedules.find((s) => s.scheduleID === scheduleID);
-    if (!schedule) {
+    if (!scheduleID || isNaN(Number(scheduleID))) {
       return NextResponse.json(
-        { message: "Schedule not found" },
-        { status: 404 }
+        {
+          success: false,
+          error: 'Invalid schedule ID',
+        },
+        { status: 400 }
       );
     }
 
-    // Validate day if provided
-    if (body.pickupDay) {
-      const validDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-      if (!validDays.includes(body.pickupDay)) {
-        return NextResponse.json(
-          { message: "Invalid pickup day" },
-          { status: 400 }
-        );
-      }
+    const body = await request.json();
+
+    // Validate at least one field to update
+    if (
+      !body.communityName &&
+      !body.pickupDay &&
+      !body.pickupTime &&
+      !body.frequency &&
+      body.isActive === undefined &&
+      !body.notes
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'No fields provided for update',
+        },
+        { status: 400 }
+      );
     }
 
-    // Validate time format if provided
-    if (body.pickupTime) {
-      const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-      if (!timeRegex.test(body.pickupTime)) {
-        return NextResponse.json(
-          { message: "Invalid time format (use HH:MM)" },
-          { status: 400 }
-        );
-      }
-    }
+    // TODO: Replace with your actual database call
+    // Example: const schedule = await db.schedule.update({
+    //   where: { scheduleID: parseInt(scheduleID) },
+    //   data: body
+    // });
 
-    // Validate frequency if provided
-    if (body.frequency) {
-      const validFrequencies = ["Weekly", "Bi-weekly", "Monthly", "Twice a week"];
-      if (!validFrequencies.includes(body.frequency)) {
-        return NextResponse.json(
-          { message: "Invalid frequency" },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Validate inactive value if provided (should be 0 or 1)
-    if (body.inactive !== undefined) {
-      if (body.inactive !== 0 && body.inactive !== 1) {
-        return NextResponse.json(
-          { message: "Invalid inactive value (use 0 or 1)" },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Update fields
-    if (body.community) schedule.community = body.community;
-    if (body.pickupDay) schedule.pickupDay = body.pickupDay;
-    if (body.pickupTime) schedule.pickupTime = body.pickupTime;
-    if (body.frequency) schedule.frequency = body.frequency;
-    if (body.inactive !== undefined) schedule.inactive = body.inactive;
+    const updatedSchedule: Schedule = {
+      scheduleID: parseInt(scheduleID),
+      communityName: body.communityName || 'Sample Community',
+      pickupDay: body.pickupDay || 'Monday',
+      pickupTime: body.pickupTime || '09:00 AM',
+      frequency: body.frequency || 'WEEKLY',
+      isActive: body.isActive !== undefined ? body.isActive : true,
+      notes: body.notes || null,
+      createdAt: new Date().toISOString(),
+    };
 
     return NextResponse.json(
       {
-        message: "Schedule updated successfully",
-        schedule,
+        success: true,
+        data: updatedSchedule,
       },
       { status: 200 }
     );
   } catch (error) {
-    console.error("PUT /api/schedule/[id] error:", error);
+    console.error(`PUT /api/schedule/[id] error:`, error);
     return NextResponse.json(
-      { message: "Internal server error" },
+      {
+        success: false,
+        error: 'Failed to update schedule',
+      },
       { status: 500 }
     );
   }
 }
 
-// DELETE - Delete schedule
+// DELETE: Delete a specific schedule by ID
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+  { params }: ScheduleParams
+): Promise<NextResponse<{ success: boolean; error?: string }>> {
   try {
-    const scheduleID = parseInt(params.id);
-    console.log("DELETE /api/schedule/[id] - Deleting schedule:", scheduleID);
-    
-    const index = schedules.findIndex((s) => s.scheduleID === scheduleID);
+    const scheduleID = params.id;
 
-    if (index === -1) {
+    if (!scheduleID || isNaN(Number(scheduleID))) {
       return NextResponse.json(
-        { message: "Schedule not found" },
-        { status: 404 }
+        {
+          success: false,
+          error: 'Invalid schedule ID',
+        },
+        { status: 400 }
       );
     }
 
-    const deletedSchedule = schedules.splice(index, 1);
+    // TODO: Replace with your actual database call
+    // Example: await db.schedule.delete({ where: { scheduleID: parseInt(scheduleID) } });
 
     return NextResponse.json(
-      {
-        message: "Schedule deleted successfully",
-        schedule: deletedSchedule[0],
-      },
+      { success: true },
       { status: 200 }
     );
   } catch (error) {
-    console.error("DELETE /api/schedule/[id] error:", error);
+    console.error(`DELETE /api/schedule/[id] error:`, error);
     return NextResponse.json(
-      { message: "Internal server error" },
+      {
+        success: false,
+        error: 'Failed to delete schedule',
+      },
       { status: 500 }
     );
   }

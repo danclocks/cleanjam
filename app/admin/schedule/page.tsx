@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Plus, Edit2, Trash2, Search, Calendar, Clock, MapPin, AlertCircle, CheckCircle, X } from "lucide-react";
 
 interface Schedule {
+  scheduleID:number;
   id: number;
   community: string;
   pickupDay: string;
