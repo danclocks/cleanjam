@@ -321,7 +321,7 @@ export default function HomePage() {
           </div>
 
           <Link 
-            href="/auth/signup"
+            href="/register"
             className="px-12 py-4 bg-white text-green-600 font-black rounded-xl hover:bg-gray-100 transition-smooth flex items-center justify-center gap-2 text-lg mx-auto shadow-lg"
           >
             Start Earning Now <ArrowRight size={24} />
