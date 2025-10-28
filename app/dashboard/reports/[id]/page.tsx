@@ -22,7 +22,6 @@ import {
   Image as ImageIcon,
   User,
   Mail,
-  MapPinned,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
