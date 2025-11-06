@@ -2,22 +2,12 @@
  * ===================================
  * FILE PATH: app/api/reports/route.ts
  * 
- * ROUTE LINKS:
- * - POST  /api/reports          → Create a new garbage report
- * - GET   /api/reports          → Fetch all reports (with filters)
- * - GET   /api/reports?status=X → Fetch reports filtered by status
+ * CRITICAL FIX: 
+ * - auth.users.id is UUID (Supabase Auth)
+ * - public.users.user_id is INTEGER (internal ID)
+ * - reports.user_id is INTEGER
+ * - Must convert UUID → INTEGER via public.users table
  * ===================================
- *
- * API endpoint for:
- * 1. POST: Create a new garbage report with photo uploads
- * 2. GET: Fetch all reports with joined user + location info
- * 
- * Tables joined:
- *   - reports (main)
- *   - users (join on user_id → get reporter info)
- *   - locations (join on location_id → get coordinates & address)
- * 
- * CleanJamaica Dashboard 2025
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -219,15 +209,15 @@ export async function POST(request: NextRequest) {
  * GET /api/reports
  * GET /api/reports?status=pending
  * 
- * Fetches all reports with joined user and location information.
- * Supports filtering by status via query parameter.
+ * Fetches reports created by the signed-in user ONLY.
  * 
- * BUG FIX NOTES:
- * - Changed: location:location() → users:users(), locations:locations()
- * - This ensures proper table joins to users and locations tables
- * - Consistent property mapping: r.users and r.locations
+ * KEY FIX: auth_id (UUID) → user_id (INTEGER)
+ * 1. Extract Bearer token from Authorization header
+ * 2. Get Supabase auth user (UUID)
+ * 3. Look up internal user_id (INTEGER) from public.users table
+ * 4. Filter reports by internal user_id
  */
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status");
@@ -235,11 +225,91 @@ export async function GET(req: Request) {
     console.log("📖 [GET /api/reports] Request received");
     console.log("   ├─ Status filter:", status || "all");
 
-    // ✅ FIX: Proper table joins with correct aliases
+    // ==================== STEP 1: GET BEARER TOKEN ====================
+    const authHeader = req.headers.get("Authorization");
+    console.log("🔐 [GET /api/reports] Authorization header:", authHeader ? "✅ found" : "❌ not found");
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      console.error("❌ [GET /api/reports] No Bearer token in Authorization header");
+      return NextResponse.json(
+        { success: false, error: "User not authenticated - no Bearer token provided" },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.substring(7); // Remove "Bearer " prefix
+    console.log("   └─ Token extracted:", `${token.substring(0, 20)}...`);
+
+    // ==================== STEP 2: GET AUTH USER (UUID) ====================
+    const authSupabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        global: {
+          headers: {
+            authorization: `Bearer ${token}`,
+          },
+        },
+      }
+    );
+
+    const { data: { user: authUser }, error: authError } = await authSupabase.auth.getUser();
+
+    console.log("🔑 [GET /api/reports] Auth verification:");
+    console.log("   ├─ Auth user (UUID):", authUser ? `✅ ${authUser.id}` : "❌ Not found");
+    if (authError) {
+      console.error("   └─ Auth error:", authError.message);
+    }
+
+    if (!authUser) {
+      console.error("❌ [GET /api/reports] User not authenticated:", authError?.message);
+      return NextResponse.json(
+        { success: false, error: "User not authenticated", details: authError?.message },
+        { status: 401 }
+      );
+    }
+
+    // ==================== STEP 3: CONVERT UUID → INTEGER USER_ID ====================
+    // Look up the internal user_id (INTEGER) using auth_id (UUID)
+    console.log("🔄 [GET /api/reports] Looking up internal user_id from public.users...");
+
+    const { data: userRecord, error: userError } = await supabase
+      .from("users")
+      .select("user_id")
+      .eq("auth_id", authUser.id)
+      .single();
+
+    console.log("   ├─ Lookup result:");
+    console.log("   ├─ Auth ID (UUID):", authUser.id);
+    console.log("   ├─ Internal user_id (INTEGER):", userRecord?.user_id || "❌ Not found");
+    if (userError) {
+      console.error("   └─ Lookup error:", userError.message);
+    }
+
+    if (!userRecord) {
+      console.error("❌ [GET /api/reports] User record not found in public.users table");
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: "User profile not found", 
+          details: `No user record found for auth_id: ${authUser.id}`,
+          authId: authUser.id 
+        },
+        { status: 404 }
+      );
+    }
+
+    const internalUserId = userRecord.user_id;
+    console.log(`✅ [GET /api/reports] User authenticated: ${authUser.id} → internal ID: ${internalUserId}`);
+
+    // ==================== STEP 4: BUILD QUERY WITH USER FILTER ====================
+    console.log("📋 [GET /api/reports] Building query...");
+
     let query = supabase
-      .from("vw_user_report_details")
+      .from("vw_user_report_detail")
       .select(`
         report_id,
+        user_id,
         report_type,
         description,
         status,
@@ -249,25 +319,35 @@ export async function GET(req: Request) {
         users:user_id(id, full_name, email),
         locations:location_id(id, name, latitude, longitude)
       `)
+      .eq("user_id", internalUserId)  // ← FILTER: Only this user's reports (INTEGER)
       .order("created_at", { ascending: false });
 
+    console.log(`   └─ Filtering by user_id: ${internalUserId}`);
+
+    // ==================== STEP 5: APPLY STATUS FILTER IF PROVIDED ====================
     if (status && status !== "all") {
       query = query.eq("status", status);
-      console.log("   └─ Applying status filter:", status);
+      console.log("   └─ Additional status filter:", status);
     }
 
+    // ==================== STEP 6: EXECUTE QUERY ====================
     const { data, error } = await query;
 
     if (error) {
       console.error("❌ [GET /api/reports] Query error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      console.error("   └─ Full error:", error);
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 500 }
+      );
     }
 
-    console.log("✅ [GET /api/reports] Retrieved", data?.length || 0, "reports");
+    console.log(`✅ [GET /api/reports] Query executed - found ${data?.length || 0} report(s)`);
 
-    // ✅ FIX: Consistent property mapping with proper null checks
-    const formatted = data.map((r: any) => ({
+    // ==================== STEP 7: FORMAT RESPONSE ====================
+    const formatted = data?.map((r: any) => ({
       report_id: r.report_id,
+      user_id: r.user_id,
       report_type: r.report_type,
       description: r.description,
       status: r.status,
@@ -279,13 +359,20 @@ export async function GET(req: Request) {
       location_name: r.locations?.name || "Unknown",
       latitude: r.locations?.latitude || null,
       longitude: r.locations?.longitude || null,
-    }));
+    })) || [];
 
-    return NextResponse.json(formatted);
+    return NextResponse.json({
+      success: true,
+      authenticated_user_auth_id: authUser.id,  // Debug: Supabase auth ID
+      authenticated_user_id: internalUserId,     // Debug: Internal user ID
+      count: formatted.length,
+      data: formatted,
+    });
   } catch (error: any) {
     console.error("❌ [GET /api/reports] Exception:", error);
+    console.error("   └─ Stack:", error.stack);
     return NextResponse.json(
-      { error: error.message || "An unexpected error occurred" },
+      { success: false, error: error.message || "An unexpected error occurred" },
       { status: 500 }
     );
   }

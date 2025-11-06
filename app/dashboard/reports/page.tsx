@@ -2,26 +2,11 @@
  * ================================================================
  * FILE PATH: app/dashboard/reports/page.tsx
  * 
- * PAGE ROUTE LINKS:
- * - GET  /dashboard/reports              → Display all reports
- * - GET  /dashboard/reports?status=X     → Display reports filtered by status
- * - POST /dashboard/reports/new          → Navigate to create new report
- * - GET  /dashboard/reports/[id]         → View individual report details
+ * FIXED: Query the view directly without nested relationships
  * ================================================================
- *
- * Reports listing page – API-based (no client-side Supabase calls)
- * 
- * Features:
- * - Fetches from /api/reports/details endpoint (Supabase view)
- * - Joins: reports → users → locations
- * - Status filtering (all, pending, assigned, in_progress, completed, resolved)
- * - Google Maps integration for location viewing
- * - Fully responsive: mobile (320px+), tablet (768px+), desktop (1024px+)
- * - CleanJamaica brand colors (green/emerald)
- * - Comprehensive error logging for debugging
- * 
- * CleanJamaica Dashboard 2025
  */
+
+"use client";
 
 import {
   Trash2,
@@ -33,10 +18,11 @@ import {
   Plus,
   Eye,
   Map,
+  Loader,
 } from "lucide-react";
 import Link from "next/link";
-
-export const dynamic = "force-dynamic"; // Ensure SSR freshness
+import { useEffect, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 interface ReportView {
   report_id: string;
@@ -44,7 +30,7 @@ interface ReportView {
   description: string;
   status: string;
   priority: string;
-  created_at: string;
+  user_created_at: string;
   resolved_at: string | null;
   location_name: string;
   latitude: number | null;
@@ -53,144 +39,113 @@ interface ReportView {
   reporter_email: string;
 }
 
-interface ApiErrorResponse {
-  success: boolean;
-  message: string;
-  error?: string;
-  debug?: any;
-}
-
-/**
- * Fetches reports from /api/reports/details endpoint
- * @param filter - Status filter (all, pending, assigned, etc.)
- * @returns Array of ReportView objects or null if error
- */
-async function getReports(filter?: string): Promise<ReportView[] | null> {
-  try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-
-    if (!baseUrl) {
-      console.error("❌ [ReportsPage] NEXT_PUBLIC_BASE_URL not set");
-      throw new Error("Missing NEXT_PUBLIC_BASE_URL environment variable");
-    }
-
-    const url = filter && filter !== "all"
-      ? `${baseUrl}/api/details?status=${encodeURIComponent(filter)}`
-      : `${baseUrl}/api/details`;
-
-    console.log("📖 [ReportsPage] Fetching from:", url);
-
-    const res = await fetch(url, { 
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    console.log("   ├─ Response status:", res.status);
-    console.log("   ├─ Response headers:", Object.fromEntries(res.headers.entries()));
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      console.error("   ├─ Response not OK");
-      console.error("   ├─ Status:", res.status, res.statusText);
-      console.error("   └─ Body:", errorText);
-
-      // Try to parse as JSON
-      try {
-        const errorJson = JSON.parse(errorText) as ApiErrorResponse;
-        console.error("   └─ Error message:", errorJson.message);
-        if (errorJson.debug) {
-          console.error("   └─ Debug info:", errorJson.debug);
-        }
-        throw new Error(`API Error: ${errorJson.message}`);
-      } catch (parseErr) {
-        throw new Error(`API Error ${res.status}: ${res.statusText}`);
-      }
-    }
-
-    const responseText = await res.text();
-    console.log("   ├─ Raw response:", responseText.substring(0, 500));
-
-    let data: any;
-    try {
-      data = JSON.parse(responseText);
-    } catch (parseErr) {
-      console.error("❌ Failed to parse response as JSON");
-      console.error("   └─ Response:", responseText);
-      throw new Error("Invalid JSON response from API");
-    }
-
-    console.log("   ├─ Parsed response:", data);
-
-    // Handle different response formats
-    let reports: ReportView[] = [];
-
-    if (Array.isArray(data)) {
-      // Direct array response
-      reports = data;
-      console.log("   └─ Response is array, got", reports.length, "items");
-    } else if (data.data && Array.isArray(data.data)) {
-      // Wrapped response {data: [...]}
-      reports = data.data;
-      console.log("   └─ Response is wrapped, got", reports.length, "items");
-    } else if (data.success === false) {
-      // Error response
-      throw new Error(data.message || "API returned error");
-    } else {
-      console.error("❌ Unexpected response format:", data);
-      throw new Error("Unexpected API response format");
-    }
-
-    // Validate data structure
-    console.log("   └─ Validating report structure...");
-    if (reports.length > 0) {
-      const firstReport = reports[0];
-      console.log("   ├─ First report keys:", Object.keys(firstReport));
-      console.log("   ├─ First report sample:", {
-        report_id: firstReport.report_id,
-        description: firstReport.description?.substring(0, 50),
-        latitude: firstReport.latitude,
-        longitude: firstReport.longitude,
-      });
-    }
-
-    console.log(`✅ [ReportsPage] Retrieved ${reports.length} reports`);
-    return reports;
-  } catch (error: any) {
-    console.error("❌ [ReportsPage] Error fetching reports:", error.message);
-    console.error("   └─ Full error:", error);
-    return null;
-  }
-}
-
-export default async function ReportsPage({
+export default function ReportsPage({
   searchParams,
 }: {
   searchParams?: { status?: string };
 }) {
   const filterStatus = searchParams?.status || "all";
-  let reports: ReportView[] = [];
-  let fetchError: string | null = null;
-  let fetchErrorDetails: any = null;
+  const [reports, setReports] = useState<ReportView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  console.log("🔄 [ReportsPage] Rendering with filter:", filterStatus);
+  useEffect(() => {
+    const fetchReports = async () => {
+      try {
+        setLoading(true);
+        setError(null);
 
-  try {
-    const result = await getReports(filterStatus);
-    if (result === null) {
-      fetchError = "Failed to load reports from API";
-      fetchErrorDetails = "Check browser console for detailed error";
-    } else {
-      reports = result;
-    }
-  } catch (error: any) {
-    console.error("❌ [ReportsPage] Caught error:", error.message);
-    fetchError = error.message || "Unknown error occurred while fetching reports";
-    fetchErrorDetails = error;
-  }
+        // Create Supabase client
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        );
 
-  const filteredCount = reports.length;
+        console.log("🔐 [ReportsPage] Getting authenticated user...");
+
+        // Get current user
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser();
+
+        if (authError || !user) {
+          console.error("❌ Auth error:", authError?.message);
+          throw new Error("Please log in to view reports");
+        }
+
+        console.log(`✅ Authenticated as: ${user.id}`);
+
+        // Look up internal user_id
+        console.log("📋 Looking up user profile...");
+        const { data: userRecord, error: userError } = await supabase
+          .from("users")
+          .select("user_id")
+          .eq("auth_id", user.id)
+          .single();
+
+        if (userError || !userRecord) {
+          console.error("❌ User profile error:", userError?.message);
+          throw new Error("Your user profile was not found");
+        }
+
+        const internalUserId = userRecord.user_id;
+        console.log(`✅ Internal user_id: ${internalUserId}`);
+
+        // ==================== FIXED: Query view directly ====================
+        // Get all columns from the view without nested relationships
+        console.log("📖 Fetching reports...");
+        let query = supabase
+          .from("vw_user_report_detail")
+          .select("*")  // ← FIXED: Just get all columns from view
+          .eq("user_id", internalUserId)
+          .order("user_created_at", { ascending: false });
+
+        // Apply status filter
+        if (filterStatus && filterStatus !== "all") {
+          query = query.eq("status", filterStatus);
+          console.log("   Filter by status:", filterStatus);
+        }
+
+        // Execute query
+        const { data, error: queryError } = await query;
+
+        if (queryError) {
+          console.error("❌ Query error:", queryError.message);
+          throw new Error(`Failed to fetch reports: ${queryError.message}`);
+        }
+
+        console.log(`✅ Retrieved ${data?.length || 0} reports`);
+
+        // ==================== FORMAT RESPONSE ====================
+        // Map the view columns to our interface
+        const formatted = (data || []).map((r: any) => ({
+          report_id: r.report_id,
+          report_type: r.report_type,
+          description: r.description,
+          status: r.status,
+          priority: r.priority,
+          user_created_at: r.user_created_at,
+          resolved_at: r.resolved_at,
+          reporter_name: r.full_name || "Unknown",
+          reporter_email: r.email || "N/A",
+          location_name: r.name || "Unknown",
+          latitude: r.latitude || null,
+          longitude: r.longitude || null,
+        }));
+
+        setReports(formatted);
+      } catch (err: any) {
+        console.error("❌ Error:", err.message);
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchReports();
+  }, [filterStatus]);
+
   const totalCount = reports.length;
 
   return (
@@ -198,7 +153,6 @@ export default async function ReportsPage({
       {/* ===== HEADER SECTION ===== */}
       <div className="bg-gradient-to-r from-green-600 to-emerald-600 text-white py-6 sm:py-8 px-4 sm:px-6 md:px-8">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          {/* Header Title */}
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="flex-shrink-0">
               <Trash2 size={28} className="sm:w-8 sm:h-8" />
@@ -214,7 +168,6 @@ export default async function ReportsPage({
             </div>
           </div>
 
-          {/* New Report Button */}
           <Link
             href="/dashboard/reports/new"
             className="inline-flex items-center justify-center bg-white text-green-600 px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg font-bold hover:bg-gray-100 transition duration-200 whitespace-nowrap"
@@ -224,7 +177,6 @@ export default async function ReportsPage({
           </Link>
         </div>
 
-        {/* Subtitle */}
         <p className="text-green-100 text-xs sm:text-sm mt-4">
           Track all your garbage issue reports and view their locations.
         </p>
@@ -236,10 +188,11 @@ export default async function ReportsPage({
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-4 sm:p-6 mb-6 sm:mb-8">
           <div className="flex items-center gap-2 sm:gap-3 mb-4">
             <Filter size={20} className="sm:w-6 sm:h-6 text-green-600 flex-shrink-0" />
-            <h2 className="text-lg sm:text-xl font-bold text-gray-900">Filter Reports</h2>
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900">
+              Filter Reports
+            </h2>
           </div>
 
-          {/* Filter Buttons - Responsive Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
             {["all", "pending", "assigned", "in_progress", "completed", "resolved"].map(
               (status) => (
@@ -260,21 +213,27 @@ export default async function ReportsPage({
         </div>
 
         {/* ===== REPORTS LIST ===== */}
-        {fetchError ? (
-          // Error State with Detailed Messages
+        {loading ? (
+          // Loading State
+          <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-8 sm:p-12 text-center">
+            <Loader size={40} className="sm:w-12 sm:h-12 text-green-400 mx-auto mb-4 animate-spin" />
+            <p className="text-gray-600 font-semibold text-base sm:text-lg">
+              Loading your reports...
+            </p>
+          </div>
+        ) : error ? (
+          // Error State
           <div className="space-y-4">
-            {/* Main Error Card */}
             <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-red-200 p-8 sm:p-12 text-center">
               <AlertCircle size={40} className="sm:w-12 sm:h-12 text-red-400 mx-auto mb-4" />
               <p className="text-red-600 font-semibold text-base sm:text-lg">
-                {fetchError}
+                Failed to load reports
               </p>
-              <p className="text-gray-600 text-sm mt-2">
-                Please check the troubleshooting steps below or try refreshing the page
+              <p className="text-gray-700 text-sm mt-2 font-mono bg-gray-50 p-3 rounded border border-gray-200">
+                {error}
               </p>
             </div>
 
-            {/* Troubleshooting Card */}
             <div className="bg-blue-50 rounded-xl sm:rounded-2xl border border-blue-200 p-6">
               <div className="flex gap-3">
                 <div className="flex-shrink-0">
@@ -283,27 +242,15 @@ export default async function ReportsPage({
                 <div>
                   <h3 className="font-bold text-blue-900 mb-3">Troubleshooting:</h3>
                   <ul className="space-y-2 text-sm text-blue-800">
-                    <li>✓ Check that API endpoint <code className="bg-blue-100 px-2 py-1 rounded">/api/reports/details</code> exists</li>
-                    <li>✓ Verify Supabase view <code className="bg-blue-100 px-2 py-1 rounded">vw_user_report_detail</code> exists in your database</li>
-                    <li>✓ Check environment variables: <code className="bg-blue-100 px-2 py-1 rounded">NEXT_PUBLIC_BASE_URL</code></li>
-                    <li>✓ Open browser DevTools (F12) → Console tab for detailed error messages</li>
-                    <li>✓ Refresh the page (Ctrl+Shift+R) to reload with latest code</li>
+                    <li>✓ Make sure you are logged in</li>
+                    <li>✓ Check your user profile exists in the database</li>
+                    <li>✓ Try refreshing the page</li>
                   </ul>
                 </div>
               </div>
             </div>
-
-            {/* Debug Info (Development Only) */}
-            {process.env.NODE_ENV === "development" && fetchErrorDetails && (
-              <div className="bg-gray-100 rounded-xl border border-gray-300 p-4">
-                <h4 className="font-bold text-gray-900 mb-2">Debug Information:</h4>
-                <pre className="text-xs text-gray-700 overflow-x-auto bg-gray-50 p-3 rounded">
-                  {JSON.stringify(fetchErrorDetails, null, 2)}
-                </pre>
-              </div>
-            )}
           </div>
-        ) : filteredCount === 0 ? (
+        ) : reports.length === 0 ? (
           // Empty State
           <div className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-8 sm:p-12 text-center">
             <Trash2 size={40} className="sm:w-12 sm:h-12 text-gray-300 mx-auto mb-4" />
@@ -322,16 +269,12 @@ export default async function ReportsPage({
                 key={report.report_id}
                 className="bg-white rounded-xl sm:rounded-2xl shadow-md border border-gray-200 p-4 sm:p-6 hover:shadow-lg hover:border-green-400 transition duration-200"
               >
-                {/* Report Card Content */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-                  {/* Left Column - Report Info */}
                   <div className="space-y-3">
-                    {/* Report Title */}
                     <h3 className="text-lg sm:text-xl font-bold text-gray-900 line-clamp-2">
                       {report.description?.substring(0, 60) || report.report_type}
                     </h3>
 
-                    {/* Location */}
                     <div className="flex items-start gap-2 text-gray-600">
                       <MapPin size={16} className="mt-0.5 flex-shrink-0 text-green-600" />
                       <span className="text-sm sm:text-base break-words">
@@ -339,11 +282,10 @@ export default async function ReportsPage({
                       </span>
                     </div>
 
-                    {/* Date */}
                     <div className="flex items-center gap-2 text-gray-600">
                       <Calendar size={16} className="flex-shrink-0 text-green-600" />
                       <span className="text-sm sm:text-base">
-                        {new Date(report.created_at).toLocaleDateString("en-US", {
+                        {new Date(report.user_created_at).toLocaleDateString("en-US", {
                           year: "numeric",
                           month: "short",
                           day: "numeric",
@@ -351,17 +293,13 @@ export default async function ReportsPage({
                       </span>
                     </div>
 
-                    {/* Reporter Info */}
                     <p className="text-xs sm:text-sm text-gray-500 break-words">
-                      Submitted by <span className="font-medium">{report.reporter_name}</span>
-                      {" "}
-                      <span className="text-gray-400">({report.reporter_email})</span>
+                      Submitted by{" "}
+                      <span className="font-medium">{report.reporter_name}</span>
                     </p>
                   </div>
 
-                  {/* Right Column - Status & Actions */}
                   <div className="flex flex-col justify-between md:text-right space-y-4">
-                    {/* Status Badge */}
                     <div>
                       <p className="text-xs sm:text-sm text-gray-600 mb-2 md:text-right">
                         Status
@@ -385,7 +323,6 @@ export default async function ReportsPage({
                       </div>
                     </div>
 
-                    {/* Action Links */}
                     <div className="flex flex-col sm:flex-row gap-3 md:justify-end">
                       {report.latitude && report.longitude ? (
                         <a
@@ -397,12 +334,7 @@ export default async function ReportsPage({
                           <Map size={16} className="mr-2 flex-shrink-0" />
                           <span>Map</span>
                         </a>
-                      ) : (
-                        <div className="inline-flex items-center px-3 sm:px-4 py-2 text-gray-400 font-bold rounded-lg text-sm">
-                          <Map size={16} className="mr-2 flex-shrink-0" />
-                          <span>No Map</span>
-                        </div>
-                      )}
+                      ) : null}
 
                       <Link
                         href={`/dashboard/reports/${report.report_id}`}

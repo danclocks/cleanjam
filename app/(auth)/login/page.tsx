@@ -1,19 +1,25 @@
 /**
  * ===================================
  * FILE PATH: app/login/page.tsx
+ * 
+ * ✨ UPDATED: Session Sync Fix
  * ===================================
  * 
- * User login form
- * Handles authentication and stores session
- * FIXED: Added black text color for input fields for proper visibility
+ * Updated handleLogin method now:
+ * 1. Authenticates user
+ * 2. Stores session in localStorage
+ * 3. SETS SUPABASE SESSION (NEW FIX!)
+ * 4. CHECKS USER ROLE from database
+ * 5. REDIRECTS based on role
  */
 
 "use client";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Leaf } from "lucide-react";
+import { Leaf, AlertCircle } from "lucide-react";
 import { loginWithEmail, storeSession, storeUser } from "@/lib/auth";
+import { createClient } from "@supabase/supabase-js";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,7 +27,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  // ==================== HANDLE LOGIN ====================
+  // ==================== HANDLE LOGIN (UPDATED WITH SESSION FIX) ====================
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -60,26 +66,88 @@ export default function LoginPage() {
 
       console.log("💾 Storing session and user data...");
 
-      // Store session tokens
+      // Store session tokens in localStorage
       storeSession(data.session);
 
-      // Store user data
+      // Store user data in localStorage
       storeUser(data.user);
 
       console.log("✅ Data stored in localStorage");
       console.log("  - Access Token: ", data.session?.accessToken ? "✅" : "❌");
       console.log("  - User: ", data.user?.email);
 
-      // ==================== REDIRECT ====================
+      // ==================== ✨ FIX: SET SUPABASE SESSION ====================
+      // This is the critical fix!
+      // We need to tell Supabase's internal session manager about the new tokens
+      // so that supabase.auth.getSession() returns the correct user
 
-      console.log("🚀 Redirecting to dashboard...");
-      router.push("/dashboard");
+      console.log("🔑 Setting Supabase auth session...");
+
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      );
+
+      // Set the session in Supabase's internal session store
+      await supabase.auth.setSession({
+        access_token: data.session.accessToken,
+        refresh_token: data.session.refreshToken,
+      });
+
+      console.log("✅ Supabase session set successfully");
+      console.log("  - Now getSession() will return the correct user");
+
+      // ==================== CHECK USER ROLE ====================
+
+      console.log("🔑 [LOGIN] Checking user role...");
+
+      const { data: userRecord, error: userError } = await supabase
+        .from("users")
+        .select("user_id, role, full_name")
+        .eq("auth_id", data.user?.id)
+        .single();
+
+      if (userError || !userRecord) {
+        console.error("❌ Failed to fetch user role:", userError?.message);
+        // Fallback: redirect to default dashboard
+        console.warn("⚠️ [LOGIN] Role check failed, using default dashboard");
+        console.log("🚀 Redirecting to /dashboard/reports...");
+        router.push("/dashboard/reports");
+        setLoading(false);
+        return;
+      }
+
+      const userRole = userRecord.role as string;
+      console.log(`✅ [LOGIN] User role found: ${userRole}`);
+      console.log(`   - Name: ${userRecord.full_name || "N/A"}`);
+      console.log(`   - Auth ID: ${data.user?.id}`);
+      console.log(`   - User ID: ${userRecord.user_id}`);
+
+      // ==================== REDIRECT BASED ON ROLE ====================
+
+      let redirectPath = "/dashboard/reports"; // Default for residents
+
+      if (userRole === "admin" || userRole === "supadmin") {
+        redirectPath = "/admin/dashboard";
+        console.log(`🚀 [LOGIN] Admin/SuperAdmin role detected`);
+        console.log(`   - Redirecting to: ${redirectPath}`);
+      } else if (userRole === "resident") {
+        console.log(`🚀 [LOGIN] Resident role detected`);
+        console.log(`   - Redirecting to: ${redirectPath}`);
+      } else {
+        console.warn(`⚠️ [LOGIN] Unknown role: ${userRole}, using default`);
+      }
+
+      console.log("🚀 Redirecting now...");
+      router.push(redirectPath);
     } catch (error: any) {
       console.error("❌ Unexpected error:", error.message);
       setError(error.message || "An unexpected error occurred");
       setLoading(false);
     }
   };
+
+  // ==================== UI ====================
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-600 to-emerald-700 flex items-center justify-center px-4">
@@ -103,9 +171,12 @@ export default function LoginPage() {
         >
           {/* Error Message */}
           {error && (
-            <div className="bg-red-50 border-l-4 border-red-600 p-4 rounded">
-              <p className="text-red-700 font-semibold text-sm">Error</p>
-              <p className="text-red-600 text-sm mt-1">{error}</p>
+            <div className="bg-red-50 border-l-4 border-red-600 p-4 rounded flex gap-3">
+              <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={20} />
+              <div>
+                <p className="text-red-700 font-semibold text-sm">Error</p>
+                <p className="text-red-600 text-sm mt-1">{error}</p>
+              </div>
             </div>
           )}
 
@@ -208,6 +279,19 @@ export default function LoginPage() {
             Back to home
           </a>
         </div>
+
+        {/* Debug Info (Development Only) */}
+        {process.env.NODE_ENV === "development" && (
+          <div className="mt-8 bg-black bg-opacity-20 rounded-lg p-4 text-green-100 text-xs">
+            <p className="font-bold mb-2">🔧 Debug - After Login:</p>
+            <p>✅ Session stored in localStorage</p>
+            <p>✅ Supabase session synced (NEW FIX!)</p>
+            <p>✅ Role checked from database</p>
+            <p>✅ resident → /dashboard/reports</p>
+            <p>✅ admin → /dashboard/admin</p>
+            <p>✅ supadmin → /dashboard/admin</p>
+          </div>
+        )}
       </div>
     </div>
   );

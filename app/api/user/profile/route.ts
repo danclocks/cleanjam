@@ -5,6 +5,8 @@
  * 
  * GET endpoint to fetch logged-in user's profile from database
  * Used by the new report page to display user information
+ * 
+ * ✨ FIXED: Now includes role field in the select
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -26,7 +28,7 @@ export async function GET(request: NextRequest) {
     // Fetch user profile from Supabase
     const { data: profileData, error: profileError } = await supabase
       .from("users")
-      .select("user_id, full_name, email, username, avatar_url")
+      .select("user_id, full_name, email, username, avatar_url, role")
       .eq("auth_id", authId)
       .single();
 
