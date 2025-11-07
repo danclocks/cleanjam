@@ -339,10 +339,10 @@ export default function AdminReportsPage() {
           {/* Mobile Menu */}
           {isMenuOpen && (
             <div className="md:hidden pb-4 border-t">
-              <a href="/dashboard/admin" className="block py-2 text-gray-700 font-medium">
+              <a href="/admin/dashboard" className="block py-2 text-gray-700 font-medium">
                 Dashboard
               </a>
-              <a href="/dashboard/admin/reports" className="block py-2 text-green-600 font-bold">
+              <a href="/admin/dashboard/reports" className="block py-2 text-green-600 font-bold">
                 Reports
               </a>
               <a href="#" className="block py-2 text-gray-700 font-medium">

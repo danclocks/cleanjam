@@ -2,7 +2,7 @@
  * ================================================================
  * FILE PATH: app/dashboard/admin/page.tsx
  * 
- * ADMIN DASHBOARD - With Sign Out Functionality
+ * ADMIN DASHBOARD - Updated with Rewards Section & Sign Out
  * ================================================================
  */
 
@@ -27,6 +27,7 @@ import {
   LogOut,
   Loader,
   Lock,
+  Gift,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -71,6 +72,13 @@ interface Report {
   reporter_email: string;
 }
 
+interface RewardsStats {
+  total_points_awarded: number;
+  total_points_redeemed: number;
+  pending_redemptions: number;
+  total_jmd_paid_out: number;
+}
+
 interface DashboardData {
   success: boolean;
   admin: AdminUser;
@@ -99,6 +107,7 @@ export default function AdminDashboard() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(
     null
   );
+  const [rewardsStats, setRewardsStats] = useState<RewardsStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [accessDenied, setAccessDenied] = useState(false);
@@ -116,7 +125,6 @@ export default function AdminDashboard() {
         setAccessDenied(false);
 
         console.log("📡 [Page] Getting session...");
-        // Get the session from client
         const { data: { session } } = await supabase.auth.getSession();
         console.log("📡 [Page] Session found?", !!session);
 
@@ -140,11 +148,7 @@ export default function AdminDashboard() {
         setStatusCode(response.status);
         const data = await response.json();
 
-        // ============================================
-        // HANDLE API RESPONSES
-        // ============================================
         console.log("📡 [Page] Getting session...");
-        // const { data: { session } } = await supabase.auth.getSession();
         console.log("📡 [Page] Session user email:", session?.user?.email);
         console.log("📡 [Page] Session user ID:", session?.user?.id);
 
@@ -168,6 +172,29 @@ export default function AdminDashboard() {
 
         console.log("✅ [Page] Dashboard data received successfully");
         setDashboardData(data);
+
+        // ========== FETCH REWARDS STATS ==========
+        console.log("💳 [Page] Fetching rewards stats...");
+        try {
+          const rewardsResponse = await fetch("/api/admin/rewards/stats", {
+            method: "GET",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${session.access_token}`,
+            },
+          });
+
+          if (rewardsResponse.ok) {
+            const rewardsData = await rewardsResponse.json();
+            console.log("✅ [Page] Rewards stats loaded:", rewardsData);
+            setRewardsStats(rewardsData);
+          } else {
+            console.warn("⚠️ [Page] Failed to fetch rewards stats");
+          }
+        } catch (rewardsError) {
+          console.warn("⚠️ [Page] Error fetching rewards stats:", rewardsError);
+        }
       } catch (err: any) {
         console.error("❌ [Page] Error loading dashboard:", err.message);
         setError(err.message);
@@ -180,7 +207,7 @@ export default function AdminDashboard() {
   }, [router]);
 
   // ============================================
-  // HANDLE SIGN OUT (NEW)
+  // HANDLE SIGN OUT
   // ============================================
   const handleSignOut = async () => {
     try {
@@ -190,7 +217,6 @@ export default function AdminDashboard() {
       await logout();
 
       console.log("✅ [DASHBOARD] Sign out successful!");
-      // logout() redirects to home automatically, but just in case:
       router.push("/");
     } catch (error: any) {
       console.error("❌ [DASHBOARD] Sign out error:", error.message);
@@ -345,8 +371,8 @@ export default function AdminDashboard() {
               <a href="/admin/dashboard/reports" className="text-gray-700 hover:text-green-600 font-medium">
                 Reports
               </a>
-              <a href="#" className="text-gray-700 hover:text-green-600 font-medium">
-                Officers
+              <a href="/admin/redemptions" className="text-gray-700 hover:text-green-600 font-medium">
+                Redemptions
               </a>
               <a href="#" className="text-gray-700 hover:text-green-600 font-medium">
                 Users
@@ -388,7 +414,6 @@ export default function AdminDashboard() {
                     >
                       Go to User Dashboard
                     </a>
-                    {/* ✨ SIGN OUT BUTTON - NOW ACTIVE */}
                     <button
                       onClick={handleSignOut}
                       disabled={isSigningOut}
@@ -416,11 +441,11 @@ export default function AdminDashboard() {
               <a href="/admin/dashboard" className="block py-2 text-green-600 font-bold">
                 Dashboard
               </a>
-              <a href="#" className="block py-2 text-gray-700 font-medium">
+              <a href="/admin/dashboard/reports" className="block py-2 text-gray-700 font-medium">
                 Reports
               </a>
-              <a href="#" className="block py-2 text-gray-700 font-medium">
-                Officers
+              <a href="/admin/redemptions" className="block py-2 text-gray-700 font-medium">
+                Redemptions
               </a>
               <a href="#" className="block py-2 text-gray-700 font-medium">
                 Users
@@ -472,6 +497,67 @@ export default function AdminDashboard() {
               );
             })}
           </div>
+
+          {/* Rewards Statistics Section */}
+          {rewardsStats && (
+            <div className="grid md:grid-cols-4 gap-6 mb-10">
+              {/* Total Points Awarded */}
+              <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg border border-purple-200 p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-purple-900 text-sm font-bold">
+                    Total Points Awarded
+                  </p>
+                  <Gift className="text-purple-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-purple-600">
+                  {rewardsStats.total_points_awarded.toLocaleString()}
+                </p>
+                <p className="text-xs text-purple-700 mt-2">Lifetime awarded</p>
+              </div>
+
+              {/* Total Points Redeemed */}
+              <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg border border-green-200 p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-green-900 text-sm font-bold">
+                    Total Points Redeemed
+                  </p>
+                  <CheckCircle className="text-green-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-green-600">
+                  {rewardsStats.total_points_redeemed.toLocaleString()}
+                </p>
+                <p className="text-xs text-green-700 mt-2">Completed redemptions</p>
+              </div>
+
+              {/* Pending Redemptions */}
+              <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-lg border border-orange-200 p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-orange-900 text-sm font-bold">
+                    Pending Redemptions
+                  </p>
+                  <Clock className="text-orange-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-orange-600">
+                  {rewardsStats.pending_redemptions.toLocaleString()}
+                </p>
+                <p className="text-xs text-orange-700 mt-2">Awaiting approval</p>
+              </div>
+
+              {/* Total JMD Paid Out */}
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200 p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-blue-900 text-sm font-bold">
+                    Total JMD Paid Out
+                  </p>
+                  <TrendingUp className="text-blue-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-blue-600">
+                  ${rewardsStats.total_jmd_paid_out.toLocaleString()}
+                </p>
+                <p className="text-xs text-blue-700 mt-2">1 point = 1 JMD</p>
+              </div>
+            </div>
+          )}
 
           {/* Charts Section */}
           <div className="grid md:grid-cols-2 gap-6 mb-10">

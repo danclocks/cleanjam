@@ -4,8 +4,8 @@
  * ===================================
  * 
  * Main dashboard page with quick actions and statistics
- * Displays user profile, summary stats, and navigation to key features
- * FIXED: Better error handling, null checks, and data validation
+ * UPDATED: Fetches real rewards data from /api/rewards/user-balance
+ * Displays current points, redeemable JMD, lifetime earnings, pending redemptions
  */
 
 "use client";
@@ -19,6 +19,7 @@ import {
   AlertCircle,
   CheckCircle,
   Clock,
+  Zap,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -34,11 +35,22 @@ interface UserProfile {
   avatar_url: string | null;
 }
 
+interface UserRewards {
+  user_id: string;
+  email: string;
+  full_name: string;
+  current_points_balance: number;
+  lifetime_points_earned: number;
+  total_points_redeemed: number;
+  pending_redemption_points: number;
+  redeemable_jmd: number;
+}
+
 interface DashboardStats {
   totalReports: number;
   pendingReports: number;
   resolvedReports: number;
-  totalPoints: number;
+  rewardsData: UserRewards | null;
 }
 
 export default function DashboardPage() {
@@ -49,7 +61,7 @@ export default function DashboardPage() {
     totalReports: 0,
     pendingReports: 0,
     resolvedReports: 0,
-    totalPoints: 0,
+    rewardsData: null,
   });
   const [error, setError] = useState("");
 
@@ -73,7 +85,7 @@ export default function DashboardPage() {
 
         console.log("✅ [DASHBOARD] Stored user found:", storedUser.id);
 
-        // Fetch user profile
+        // ========== FETCH USER PROFILE ==========
         const { data: profileData, error: profileError } = await supabase
           .from("users")
           .select("user_id, full_name, email, username, avatar_url")
@@ -97,9 +109,41 @@ export default function DashboardPage() {
         console.log("✅ [DASHBOARD] User profile loaded:", profileData.full_name);
         setUserProfile(profileData as UserProfile);
 
-        // Fetch user reports for stats
+        // ========== FETCH REWARDS DATA ==========
+        console.log("💳 [DASHBOARD] Fetching rewards data...");
+        try {
+          const rewardsResponse = await fetch(
+            `/api/rewards/user-balance?auth_id=${storedUser.id}`,
+            { method: "GET" }
+          );
+
+          if (rewardsResponse.ok) {
+            const rewardsJson = await rewardsResponse.json();
+            if (rewardsJson.success && rewardsJson.user_rewards) {
+              console.log("✅ [DASHBOARD] Rewards data loaded:", rewardsJson.user_rewards);
+              
+              // Store rewards data in stats
+              setStats((prev) => ({
+                ...prev,
+                rewardsData: rewardsJson.user_rewards,
+              }));
+            } else {
+              console.warn("⚠️ [DASHBOARD] Rewards API returned success: false");
+            }
+          } else {
+            console.warn(
+              "⚠️ [DASHBOARD] Failed to fetch rewards:",
+              rewardsResponse.status
+            );
+          }
+        } catch (rewardsError) {
+          console.warn("⚠️ [DASHBOARD] Error fetching rewards:", rewardsError);
+          // Don't fail completely, just continue without rewards
+        }
+
+        // ========== FETCH USER REPORTS ==========
         console.log("📋 [DASHBOARD] Fetching reports...");
-        
+
         const { data: reportsData, error: reportsError } = await supabase
           .from("reports")
           .select("status")
@@ -121,30 +165,26 @@ export default function DashboardPage() {
             (r) => r.status === "resolved"
           ).length;
 
-          // Calculate points: 10 points per resolved report
-          const totalPoints = resolvedReports * 10;
-
-          setStats({
+          setStats((prev) => ({
+            ...prev,
             totalReports,
             pendingReports,
             resolvedReports,
-            totalPoints,
-          });
+          }));
 
-          console.log("📊 [DASHBOARD] Stats calculated:", {
+          console.log("📊 [DASHBOARD] Report stats calculated:", {
             totalReports,
             pendingReports,
             resolvedReports,
-            totalPoints,
           });
         } else {
-          console.log("ℹ️ [DASHBOARD] No reports found, using default stats");
-          setStats({
+          console.log("ℹ️ [DASHBOARD] No reports found");
+          setStats((prev) => ({
+            ...prev,
             totalReports: 0,
             pendingReports: 0,
             resolvedReports: 0,
-            totalPoints: 0,
-          });
+          }));
         }
 
         setLoading(false);
@@ -306,7 +346,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Statistics */}
+        {/* Reports Statistics */}
         <div className="mb-8">
           <h2 className="text-2xl font-black text-gray-900 mb-4">
             Your Activity
@@ -350,21 +390,87 @@ export default function DashboardPage() {
               <p className="text-xs text-gray-500 mt-2">Issues resolved</p>
             </div>
 
-            {/* Total Points */}
+            {/* Lifetime Points */}
             <div className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-all">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-gray-600 text-sm font-semibold">
-                  Total Points
+                  Lifetime Points
                 </p>
                 <TrendingUp className="text-purple-600" size={20} />
               </div>
               <p className="text-3xl font-black text-purple-600">
-                {stats.totalPoints}
+                {stats.rewardsData?.lifetime_points_earned || 0}
               </p>
-              <p className="text-xs text-gray-500 mt-2">Points earned</p>
+              <p className="text-xs text-gray-500 mt-2">All time earned</p>
             </div>
           </div>
         </div>
+
+        {/* Rewards Section */}
+        {stats.rewardsData ? (
+          <div className="mb-8">
+            <h2 className="text-2xl font-black text-gray-900 mb-4">
+              Your Rewards
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Current Points Balance */}
+              <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg border border-purple-200 p-6 hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-purple-900 text-sm font-bold">
+                    Current Balance
+                  </p>
+                  <Zap className="text-purple-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-purple-600">
+                  {stats.rewardsData.current_points_balance.toLocaleString()}
+                </p>
+                <p className="text-xs text-purple-700 mt-2">Points available</p>
+              </div>
+
+              {/* Redeemable JMD */}
+              <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg border border-green-200 p-6 hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-green-900 text-sm font-bold">
+                    Redeemable JMD
+                  </p>
+                  <Gift className="text-green-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-green-600">
+                  ${stats.rewardsData.redeemable_jmd.toLocaleString()}
+                </p>
+                <p className="text-xs text-green-700 mt-2">Cash value (500pts = 500 JMD)</p>
+              </div>
+
+              {/* Total Redeemed */}
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200 p-6 hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-blue-900 text-sm font-bold">
+                    Total Redeemed
+                  </p>
+                  <CheckCircle className="text-blue-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-blue-600">
+                  {stats.rewardsData.total_points_redeemed.toLocaleString()}
+                </p>
+                <p className="text-xs text-blue-700 mt-2">Points used</p>
+              </div>
+
+              {/* Pending Redemptions */}
+              <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-lg border border-orange-200 p-6 hover:shadow-md transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-orange-900 text-sm font-bold">
+                    Pending Redemptions
+                  </p>
+                  <Clock className="text-orange-600" size={20} />
+                </div>
+                <p className="text-3xl font-black text-orange-600">
+                  {stats.rewardsData.pending_redemption_points.toLocaleString()}
+                </p>
+                <p className="text-xs text-orange-700 mt-2">Awaiting approval</p>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Getting Started Guide */}
         <div className="bg-white rounded-2xl shadow-md border border-gray-200 p-8 mb-8">
